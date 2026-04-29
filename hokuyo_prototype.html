@@ -5312,23 +5312,18 @@ function NewFarmModal({
 function DrugModal({ drug, onSave, onClose }) {
   var E = React.createElement;
   var CATEGORIES = ["注射薬","内服薬","外用薬","ワクチン","点眼・点耳","指示薬","サプリメント","その他"];
+  var UNITS = ["ml","g","cc","錠","本","個","袋","枚","A","V"];
 
-  // ── 初期値の整理 ──
-  // 量り売り: cost=瓶値段, salesPrice=1ml売値 → unitCost=cost/specNum
-  // 本売り: cost=1本原価, salesPrice=1本売値
+  // ── 初期値 ──
   var initDt = drug?.drugType || "dose";
   var initUnit = drug?.unit || (initDt === "dose" ? "ml" : "本");
   var initSpecNum = parseFloat((drug?.spec || "").replace(/[^0-9.]/g,"")) || 1;
-  // 仕入れ値（瓶/箱の値段）
   var initPurchasePrice = drug?.packCost || drug?.cost || "";
-  // 入数（瓶の容量 or 箱の入数）
   var initPurchaseQty = drug?.packSize || (initDt === "dose" ? initSpecNum : 1);
-  // 1単位あたり原価
   var initUnitCost = "";
   if (Number(initPurchasePrice) > 0 && Number(initPurchaseQty) > 0) {
     initUnitCost = Math.round(Number(initPurchasePrice) / Number(initPurchaseQty));
   }
-  // 1単位あたり売値
   var initSellPrice = drug?.pricePerUnit || drug?.salesPrice || "";
 
   // ── state ──
@@ -5339,179 +5334,136 @@ function DrugModal({ drug, onSave, onClose }) {
   var _u = useState(initUnit); var unit = _u[0]; var setUnit = _u[1];
   var _sp2 = useState(drug?.spec || ""); var spec = _sp2[0]; var setSpec = _sp2[1];
   var _dd = useState(drug?.defaultDose || ""); var dd = _dd[0]; var setDd = _dd[1];
-  // 仕入れ
   var _pp2 = useState(initPurchasePrice); var purchasePrice = _pp2[0]; var setPurchasePrice = _pp2[1];
   var _pq = useState(initPurchaseQty); var purchaseQty = _pq[0]; var setPurchaseQty = _pq[1];
   var _uc = useState(initUnitCost); var unitCost = _uc[0]; var setUnitCost = _uc[1];
-  // 販売
   var _sl = useState(initSellPrice); var sellPrice = _sl[0]; var setSellPrice = _sl[1];
   var _rx = useState(drug?.rxPrice || ""); var rxPrice = _rx[0]; var setRxPrice = _rx[1];
 
-  // 仕入れ値 or 入数が変わったら原価を再計算
   var recalcUnit = function(pp, pq) {
     var p = Number(pp); var q = Number(pq);
-    if (p > 0 && q > 0) { setUnitCost(Math.round(p / q)); }
+    if (p > 0 && q > 0) setUnitCost(Math.round(p / q));
   };
-  // 売り方切替
-  var changeDt = function(newDt) {
-    setDt(newDt);
-    if (newDt === "dose" && (unit === "個" || unit === "本")) setUnit("ml");
-    if (newDt === "unit" && (unit === "ml" || unit === "g")) setUnit("本");
+  var autoCalcSell = function() {
+    var uc2 = Number(unitCost); if (!uc2) return;
+    setSellPrice(Math.round(uc2 * 1.3));
   };
 
-  // ── プレビュー ──
   var uc = Number(unitCost) || 0;
   var sp = Number(sellPrice) || 0;
-  var pQty = Number(dd) || (dt === "dose" ? 5 : 1);
-  var pvSale = Math.round(sp * pQty);
-  var pvCost = Math.round(uc * pQty);
-  var pvProfit = pvSale - pvCost;
-  var margin = sp > 0 && uc > 0 ? Math.round((sp - uc) / sp * 100) : 0;
-  var markup = uc > 0 ? (sp / uc).toFixed(1) : "—";
+  var rx = Number(rxPrice) || 0;
 
   // ── スタイル ──
-  var sec = function(c){return{padding:"12px",borderRadius:8,border:"1px solid "+c,background:c+"18",marginBottom:12}};
-  var secT = function(t,c){return E("div",{style:{fontSize:13,fontWeight:700,color:c,marginBottom:8}},t)};
-  var fR = function(){return{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}};
-  var fB = function(f){return{flex:f||1,minWidth:0}};
-  var fL = function(t){return E("div",{style:{fontSize:11,color:"#6b7280",marginBottom:2}},t)};
+  var rowS = {display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"};
+  var labelS = {width:90,fontSize:13,fontWeight:600,color:"#374151",textAlign:"right",flexShrink:0};
+  var inputS = {flex:1,maxWidth:320};
 
   return E("div",{className:"modal-overlay",onClick:onClose},
-    E("div",{className:"modal",onClick:function(e){e.stopPropagation()},style:{maxWidth:520}},
-      E("h2",{style:{fontSize:18,fontWeight:700,marginBottom:16}}, drug ? "薬品 編集" : "薬品 新規登録"),
+    E("div",{className:"modal",onClick:function(e){e.stopPropagation()},style:{maxWidth:540,padding:28}},
 
-      // ═══ 1. 基本情報 ═══
-      E("div",{style:sec("#d1d5db")},
-        secT("❶ 基本情報","#374151"),
-        E("div",{style:{marginBottom:8}},
-          fL("薬品名 *"),
-          E("input",{className:"inp",value:name,onChange:function(e){setName(e.target.value)}})),
-        E("div",{style:fR()},
-          E("div",{style:fB(1)},
-            fL("種別"),
-            E("select",{className:"inp",value:cat,onChange:function(e){setCat(e.target.value)}},
-              E("option",{value:""},"自動判定"),
-              CATEGORIES.map(function(c){return E("option",{key:c,value:c},c)}))),
-          E("div",{style:{display:"flex",alignItems:"center",gap:6,paddingTop:14}},
-            E("input",{type:"checkbox",checked:isImport,onChange:function(e){setIsImport(e.target.checked)},style:{width:16,height:16}}),
-            E("span",{style:{fontSize:12}},"輸入薬")))
+      // ── ヘッダー ──
+      E("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,borderBottom:"2px solid #e5e7eb",paddingBottom:12}},
+        E("h2",{style:{fontSize:18,fontWeight:700,margin:0}}, drug ? "薬品編集" : "薬品 新規登録"),
+        E("label",{style:{display:"flex",alignItems:"center",gap:6,fontSize:13}},
+          E("input",{type:"checkbox",checked:isImport,onChange:function(e){setIsImport(e.target.checked)},style:{width:16,height:16}}),
+          "輸入薬")
       ),
 
-      // ═══ 2. 売り方 ═══
-      E("div",{style:sec("#93c5fd")},
-        secT("❷ カルテでの使い方","#1e40af"),
-        E("div",{style:{display:"flex",gap:8,marginBottom:8}},
-          E("button",{onClick:function(){changeDt("dose")},style:{flex:1,padding:"10px 8px",borderRadius:8,border:dt==="dose"?"2px solid #2563eb":"2px solid #e5e7eb",background:dt==="dose"?"#dbeafe":"#fff",cursor:"pointer",textAlign:"center"}},
-            E("div",{style:{fontWeight:700,fontSize:13}}, "量り売り"),
-            E("div",{style:{fontSize:10,color:"#6b7280",marginTop:2}}, "5ml使った等")),
-          E("button",{onClick:function(){changeDt("unit")},style:{flex:1,padding:"10px 8px",borderRadius:8,border:dt==="unit"?"2px solid #2563eb":"2px solid #e5e7eb",background:dt==="unit"?"#dbeafe":"#fff",cursor:"pointer",textAlign:"center"}},
-            E("div",{style:{fontWeight:700,fontSize:13}}, "1本/1個売り"),
-            E("div",{style:{fontSize:10,color:"#6b7280",marginTop:2}}, "1個渡した等"))
-        ),
-        E("div",{style:fR()},
-          E("div",{style:fB(0.6)},
-            fL("単位"),
-            E("select",{className:"inp",value:unit,onChange:function(e){setUnit(e.target.value)}},
-              dt==="dose" ? [E("option",{key:"ml",value:"ml"},"ml"),E("option",{key:"g",value:"g"},"g"),E("option",{key:"cc",value:"cc"},"cc"),E("option",{key:"錠",value:"錠"},"錠"),E("option",{key:"A",value:"A"},"アンプル"),E("option",{key:"V",value:"V"},"バイアル")]
-                         : [E("option",{key:"本",value:"本"},"本"),E("option",{key:"個",value:"個"},"個"),E("option",{key:"袋",value:"袋"},"袋"),E("option",{key:"枚",value:"枚"},"枚"),E("option",{key:"A2",value:"A"},"アンプル"),E("option",{key:"V2",value:"V"},"バイアル")])),
-          E("div",{style:fB(1)},
-            fL("規格メモ（任意）"),
-            E("input",{className:"inp",value:spec,onChange:function(e){setSpec(e.target.value)},placeholder:dt==="dose"?"例: 100ml瓶":"例: 10本入り箱"})),
-          E("div",{style:fB(0.6)},
-            fL("デフォルト数量"),
-            E("input",{className:"inp",type:"number",value:dd,onChange:function(e){setDd(e.target.value)},placeholder:dt==="dose"?"5":"1"}))
-        )
-      ),
+      // ── 薬品名 ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"薬品名"),
+        E("div",{style:inputS},
+          E("input",{className:"inp",value:name,onChange:function(e){setName(e.target.value)},placeholder:"薬品名を入力",style:{fontSize:15}}))),
 
-      // ═══ 3. 仕入れ ═══
-      E("div",{style:sec("#86efac")},
-        secT("❸ 仕入れ","#166534"),
-        // 上段: 仕入れ値 と 入数
-        E("div",{style:{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:6}},
-          E("div",{style:{minWidth:120}},
-            fL(dt==="dose" ? "1瓶（1本）の仕入れ値" : "仕入れ値"),
-            E("div",{style:{display:"flex",alignItems:"center",gap:2}},
-              E("span",{style:{fontSize:13,color:"#6b7280"}},"¥"),
-              E("input",{className:"inp",type:"number",value:purchasePrice,onChange:function(e){
-                setPurchasePrice(e.target.value);
-                recalcUnit(e.target.value, purchaseQty);
-              },style:{fontSize:14,fontWeight:700}}))),
-          E("div",{style:{fontSize:20,color:"#6b7280",paddingTop:18}},"÷"),
-          E("div",{style:{minWidth:80}},
-            fL(dt==="dose" ? "容量" : "入数"),
-            E("div",{style:{display:"flex",alignItems:"center",gap:4}},
-              E("input",{className:"inp",type:"number",value:purchaseQty,onChange:function(e){
-                setPurchaseQty(e.target.value);
-                recalcUnit(purchasePrice, e.target.value);
-              },style:{fontSize:14,width:70}}),
-              E("span",{style:{fontSize:12,color:"#6b7280"}},unit)))
-        ),
-        // 下段: 計算結果
-        E("div",{style:{background:"#dcfce7",borderRadius:6,padding:"8px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-          E("div",null,
-            E("span",{style:{fontSize:12,color:"#166534"}},"1"+unit+"あたりの原価 = "),
-            E("span",{style:{fontSize:20,fontWeight:700,color:"#059669"}},
-              uc > 0 ? "¥"+uc.toLocaleString() : "—")),
-          !isImport && uc > 0 ? E("button",{onClick:function(){var s=Math.round(uc*1.3);setSellPrice(s)},style:{padding:"6px 14px",background:"#f59e0b",color:"#fff",borderRadius:6,fontSize:12,border:"none",cursor:"pointer",fontWeight:700}},
-            "×1.3 → 売値 ¥"+Math.round(uc*1.3).toLocaleString()) : null
-        ),
-        // 手動調整
-        E("details",{style:{marginTop:6}},
-          E("summary",{style:{fontSize:10,color:"#6b7280",cursor:"pointer"}},"1"+unit+"原価を直接入力"),
-          E("div",{style:{marginTop:4,display:"flex",gap:4,alignItems:"center"}},
-            E("span",{style:{fontSize:12}},"¥"),
-            E("input",{className:"inp",type:"number",value:unitCost,onChange:function(e){setUnitCost(e.target.value)},style:{maxWidth:150,fontSize:14}})))
-      ),
+      // ── 種別 ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"種別"),
+        E("div",{style:inputS},
+          E("select",{className:"inp",value:cat,onChange:function(e){setCat(e.target.value)}},
+            E("option",{value:""},"自動判定"),
+            CATEGORIES.map(function(c2){return E("option",{key:c2,value:c2},c2)})))),
 
-      // ═══ 4. 販売価格 ═══
-      E("div",{style:sec("#fde68a")},
-        secT("❹ 売値","#92400e"),
-        E("div",{style:{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap"}},
-          // 通常単価
-          E("div",{style:{flex:1,minWidth:130}},
-            fL("通常単価（1"+unit+"）"),
-            E("div",{style:{display:"flex",alignItems:"center",gap:2}},
-              E("span",{style:{fontSize:13,color:"#6b7280"}},"¥"),
-              E("input",{className:"inp",type:"number",value:sellPrice,onChange:function(e){setSellPrice(e.target.value)},style:{fontWeight:700,fontSize:16,borderColor:"#f59e0b"}})),
-            uc > 0 && sp > 0 ? E("div",{style:{fontSize:11,color:"#6b7280",marginTop:2}},
-              "利益 ¥"+(sp-uc).toLocaleString()+" (×"+markup+")") : null),
-          // 処方単価
-          E("div",{style:{flex:1,minWidth:130}},
-            fL("処方単価（置き薬・高め）"),
-            E("div",{style:{display:"flex",alignItems:"center",gap:2}},
-              E("span",{style:{fontSize:13,color:"#6b7280"}},"¥"),
-              E("input",{className:"inp",type:"number",value:rxPrice,onChange:function(e){setRxPrice(e.target.value)},style:{fontWeight:700,fontSize:16,borderColor:"#dc2626"},placeholder:"未設定なら通常単価"})),
-            Number(rxPrice) > 0 && uc > 0 ? E("div",{style:{fontSize:11,color:"#dc2626",marginTop:2}},
-              "利益 ¥"+(Number(rxPrice)-uc).toLocaleString()+" (×"+(Number(rxPrice)/uc).toFixed(1)+")") : null),
-          // ×1.3 / ×2 ボタン
-          uc > 0 ? E("div",{style:{paddingTop:18,display:"flex",flexDirection:"column",gap:4}},
-            !isImport ? E("button",{onClick:function(){setSellPrice(Math.round(uc*1.3))},style:{padding:"4px 10px",background:"#f59e0b",color:"#fff",borderRadius:4,fontSize:10,border:"none",cursor:"pointer",whiteSpace:"nowrap"}},"通常 ×1.3 → ¥"+Math.round(uc*1.3).toLocaleString()) : null,
-            E("button",{onClick:function(){setRxPrice(Math.round(uc*2))},style:{padding:"4px 10px",background:"#dc2626",color:"#fff",borderRadius:4,fontSize:10,border:"none",cursor:"pointer",whiteSpace:"nowrap"}},"処方 ×2.0 → ¥"+Math.round(uc*2).toLocaleString())
-          ) : null
-        )
-      ),
+      // ── 規格 ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"規格"),
+        E("div",{style:{display:"flex",alignItems:"center",gap:6,flex:1,flexWrap:"wrap"}},
+          E("input",{className:"inp",type:"number",value:purchaseQty,onChange:function(e){
+            setPurchaseQty(e.target.value);
+            recalcUnit(purchasePrice, e.target.value);
+          },style:{width:70,textAlign:"center",fontSize:15,fontWeight:600}}),
+          E("select",{className:"inp",value:unit,onChange:function(e){setUnit(e.target.value)},style:{width:80}},
+            UNITS.map(function(u2){return E("option",{key:u2,value:u2},u2)})),
+          E("span",{style:{fontSize:18,fontWeight:700,color:"#9ca3af"}},"×"),
+          E("input",{className:"inp",type:"number",value:dd || 1,onChange:function(e){setDd(e.target.value)},style:{width:50,textAlign:"center",fontSize:15,fontWeight:600}}),
+          E("span",{style:{fontSize:13,color:"#6b7280"}},"本")
+        )),
 
-      // ═══ プレビュー ═══
-      sp > 0 ? E("div",{style:{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:10,marginBottom:12}},
-        E("div",{style:{fontSize:11,color:"#6b7280",marginBottom:4}},
-          "例: "+pQty+unit+" 使った場合の請求"),
-        E("div",{style:{display:"flex",gap:16,fontSize:13}},
-          E("span",null,"売上 ",E("b",{style:{color:"#2563eb"}},"¥"+pvSale.toLocaleString())),
-          uc>0 ? E("span",null,"原価 ",E("b",null,"¥"+pvCost.toLocaleString())) : null,
-          uc>0 ? E("span",null,"利益 ",E("b",{style:{color:pvProfit>=0?"#059669":"#dc2626"}},"¥"+pvProfit.toLocaleString())) : null)
+      // ── 規格メモ ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"規格メモ"),
+        E("div",{style:inputS},
+          E("input",{className:"inp",value:spec,onChange:function(e){setSpec(e.target.value)},placeholder:"例: 100ml瓶、10本入り箱"}))),
+
+      // ── 仕入れ価格 ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"仕入れ価格"),
+        E("div",{style:{display:"flex",alignItems:"center",gap:6,flex:1}},
+          E("input",{className:"inp",type:"number",value:purchasePrice,onChange:function(e){
+            setPurchasePrice(e.target.value);
+            recalcUnit(e.target.value, purchaseQty);
+          },style:{width:160,fontSize:16,fontWeight:700,textAlign:"right"}}),
+          E("span",{style:{fontSize:14,color:"#6b7280"}},"円"),
+          E("button",{onClick:autoCalcSell,style:{padding:"6px 14px",background:"#dc2626",color:"#fff",borderRadius:6,fontSize:12,border:"none",cursor:"pointer",fontWeight:700,marginLeft:8}},"自動計算"))),
+
+      // ── 1単位原価（自動表示） ──
+      uc > 0 ? E("div",{style:{...rowS,background:"#f0fdf4",borderRadius:8,padding:"8px 10px",border:"1px solid #bbf7d0"}},
+        E("div",{style:labelS},"1"+unit+"原価"),
+        E("div",{style:{fontSize:16,fontWeight:700,color:"#059669"}},"¥"+uc.toLocaleString())
       ) : null,
 
+      // ── 売値 ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"売値"),
+        E("div",{style:{display:"flex",alignItems:"center",gap:6,flex:1}},
+          E("input",{className:"inp",type:"number",value:sellPrice,onChange:function(e){setSellPrice(e.target.value)},
+            style:{width:160,fontSize:16,fontWeight:700,textAlign:"right"}}),
+          E("span",{style:{fontSize:14,color:"#6b7280"}},"円"),
+          uc > 0 && sp > 0 ? E("span",{style:{fontSize:11,color:"#6b7280",marginLeft:8}},"(×"+(sp/uc).toFixed(1)+")") : null)),
+
+      // ── 処方単価（置き薬用） ──
+      E("div",{style:rowS},
+        E("div",{style:labelS},"処方単価"),
+        E("div",{style:{display:"flex",alignItems:"center",gap:6,flex:1}},
+          E("input",{className:"inp",type:"number",value:rxPrice,onChange:function(e){setRxPrice(e.target.value)},
+            placeholder:"未設定なら売値と同じ",
+            style:{width:160,fontSize:16,fontWeight:700,textAlign:"right"}}),
+          E("span",{style:{fontSize:14,color:"#6b7280"}},"円"),
+          uc > 0 ? E("button",{onClick:function(){setRxPrice(Math.round(uc*2))},style:{padding:"4px 10px",background:"#7c3aed",color:"#fff",borderRadius:4,fontSize:10,border:"none",cursor:"pointer",marginLeft:8}},"×2.0") : null,
+          rx > 0 && uc > 0 ? E("span",{style:{fontSize:11,color:"#7c3aed",marginLeft:4}},"(×"+(rx/uc).toFixed(1)+")") : null)),
+
+      // ── 最小売値単位 ──
+      E("div",{style:{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"12px 14px",marginBottom:16}},
+        E("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}},
+          E("span",{style:{fontSize:13,fontWeight:600,color:"#374151"}},"最小売値単位"),
+          E("span",{style:{fontSize:15,fontWeight:700}},"/"+unit)),
+        E("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          E("span",{style:{fontSize:13,fontWeight:600,color:"#374151"}},"最小売値"),
+          E("span",{style:{fontSize:18,fontWeight:700,color:"#2563eb"}},sp > 0 ? "¥"+sp.toLocaleString()+" 円" : "—"))
+      ),
+
       // ═══ ボタン ═══
-      E("div",{style:{display:"flex",justifyContent:"flex-end",gap:8}},
+      E("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,borderTop:"1px solid #e5e7eb",paddingTop:16}},
         E("button",{className:"btn btn-secondary",onClick:onClose},"キャンセル"),
         E("button",{className:"btn btn-primary",onClick:function(){
           if (!name) { alert("薬品名は必須です"); return; }
           var finalSell = Number(sellPrice) || 0;
           if (!finalSell) { alert("売値を入力してください"); return; }
+          // 単位から自動判定: ml,g,cc = dose、それ以外 = unit
+          var autoDt = (unit==="ml"||unit==="g"||unit==="cc") ? "dose" : "unit";
           onSave({
             id: drug?.id || Date.now(),
             name: name,
-            drugType: dt,
+            drugType: autoDt,
             spec: spec,
             unit: unit,
             cost: Number(unitCost) || 0,
@@ -5732,6 +5684,7 @@ function FarmSearchSelect({farms, cases, value, onChange, placeholder, showAll, 
 // ═══════════════ DRUG SEARCH BOX (autocomplete) ═══════════════
 function DrugSearchBox({
   drugsMaster,
+  cases,
   value,
   onSelect,
   placeholder
@@ -5741,6 +5694,26 @@ function DrugSearchBox({
   const [highlight, setHighlight] = useState(-1);
   const boxRef = useRef(null);
   const selectedDrug = drugsMaster.find(x => x.id === Number(value));
+
+  // 薬品利用頻度を計算
+  const drugUsage = useMemo(() => {
+    var usage = {};
+    (cases || []).forEach(function(c) {
+      if (c.type === "一般") {
+        (c.visits || []).forEach(function(v) {
+          (v.drugs || []).forEach(function(dr) {
+            if (dr.drugId) usage[dr.drugId] = (usage[dr.drugId] || 0) + 1;
+          });
+        });
+      }
+      if (c.type === "薬事") {
+        (c.pharmaItems || []).forEach(function(pi) {
+          if (pi.drugId) usage[pi.drugId] = (usage[pi.drugId] || 0) + 1;
+        });
+      }
+    });
+    return usage;
+  }, [cases]);
 
   // Close on outside click
   useEffect(() => {
@@ -5755,8 +5728,10 @@ function DrugSearchBox({
     const q = text.toLowerCase();
     return d.name.toLowerCase().includes(q) || d.spec.toLowerCase().includes(q) || (d.drugType === "dose" ? "量り売り" : "一本売り").includes(q);
   }) : drugsMaster.filter(d => !d.archived);
-  const doseGroup = filtered.filter(d => d.drugType === "dose");
-  const unitGroup = filtered.filter(d => d.drugType === "unit");
+  // 頻度順ソート後にdose/unitグループ分け
+  const sortByUsage = (a, b) => (drugUsage[b.id] || 0) - (drugUsage[a.id] || 0) || a.name.localeCompare(b.name, "ja");
+  const doseGroup = filtered.filter(d => d.drugType === "dose").sort(sortByUsage);
+  const unitGroup = filtered.filter(d => d.drugType === "unit").sort(sortByUsage);
   const flatList = [...doseGroup, ...unitGroup];
   const handleKey = e => {
     if (!open) return;
@@ -5816,7 +5791,7 @@ function DrugSearchBox({
         color: "#6b7280",
         marginLeft: 6
       }
-    }, "(", d.spec, ")")), /*#__PURE__*/React.createElement("div", {
+    }, "(", d.spec, ")"), drugUsage[d.id] && /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#f59e0b",marginLeft:4,fontWeight:600}}, drugUsage[d.id]+"回")), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 10,
         color: d.drugType === "dose" ? "#2563eb" : "#7c3aed"
@@ -7372,6 +7347,7 @@ function GeneralKartePage({
       }
     }, /*#__PURE__*/React.createElement(DrugSearchBox, {
       drugsMaster: drugsMaster,
+      cases: cases,
       value: row.drugId,
       onSelect: did => {
         updateDrugRow(i, "drugId", did);
@@ -8432,6 +8408,7 @@ function BreedingInputPage({
   onBack,
   backLabel,
   onSave,
+  onDelete,
   horses,
   farms,
   cases,
@@ -8753,7 +8730,7 @@ function BreedingInputPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, "\u81EA\u52D5\u4FDD\u5B58"))), scheduledExam && bStatus === "種付中" && /*#__PURE__*/React.createElement("div", {
+  }, "\u81EA\u52D5\u4FDD\u5B58"), kase && onDelete && /*#__PURE__*/React.createElement("button", {className:"btn btn-danger btn-sm",style:{marginLeft:"auto"},onClick:function(){if(confirm("この繁殖カルテを削除しますか？\n（"+( horse?.name||"不明")+"）")){onDelete(kase.id);onBack();}}}, "\u2715 \u524A\u9664"))), scheduledExam && bStatus === "種付中" && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 14,
@@ -9236,7 +9213,67 @@ function BreedingInputPage({
       total += Number(f.vehicleKm||0) * 200 + Number(f.adjustFee||0);
       return total.toLocaleString();
     })(), "\u5186"))));
-  })));
+  })),
+  // ── 過去の繁殖記録 ──
+  (() => {
+    var horseId = kase ? kase.horseId : Number(selectedHorse);
+    if (!horseId) return null;
+    var pastCases = cases.filter(function(c) {
+      return c.type === "繁殖" && c.horseId === horseId && (!kase || c.id !== kase.id);
+    }).sort(function(a,b) {
+      return (b.season || b.openDate || "").localeCompare(a.season || a.openDate || "");
+    });
+    if (pastCases.length === 0) return null;
+    return React.createElement("div", {className:"card",style:{padding:20,marginTop:16}},
+      React.createElement("h3", {style:{fontSize:16,fontWeight:700,marginBottom:12,color:"#111827"}}, "\uD83D\uDCC5 \u904E\u53BB\u306E\u7E41\u6B96\u8A18\u9332\uFF08", horse?.name || "", "\uFF09"),
+      pastCases.map(function(pc) {
+        var pcSeason = pc.season || (pc.openDate ? pc.openDate.substring(0,4) : "不明");
+        var pcStallion = pc.stallion || "";
+        var pcStatus = pc.breedingStatus || "";
+        var pcSituation = pc.breedingSituation || "";
+        var pcIns = pc.inseminationDate || "";
+        var pcFoal = pc.foalingDate || "";
+        var pcNote = pc.breedingNote || "";
+        var pcFindings = pc.findings || [];
+        var stCol = {"継続中":"blue","種付中":"pink","受胎":"purple","不受胎":"red","妊娠中":"purple","配合しない":"gray","診療終了":"gray"};
+        return React.createElement("details", {key:pc.id,style:{marginBottom:8,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden"}},
+          React.createElement("summary", {style:{padding:"10px 14px",background:"#f9fafb",cursor:"pointer",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+            React.createElement("span", {style:{color:"#2563eb"}}, pcSeason + "\u5E74"),
+            React.createElement("span", {className:"badge badge-"+(stCol[pcStatus]||"gray")}, pcStatus),
+            pcSituation && React.createElement("span", {className:"badge badge-orange"}, pcSituation),
+            pcStallion && React.createElement("span", {style:{fontSize:12,color:"#6b7280"}}, "\u2642 ", pcStallion),
+            pcIns && React.createElement("span", {style:{fontSize:11,color:"#6b7280"}}, "\u7A2E\u4ED8:", pcIns),
+            pcFoal && React.createElement("span", {style:{fontSize:11,color:"#6b7280"}}, "\u51FA\u7523:", pcFoal)
+          ),
+          React.createElement("div", {style:{padding:"12px 14px"}},
+            pcNote && React.createElement("p", {style:{fontSize:12,color:"#374151",marginBottom:8,background:"#fef9c3",padding:"6px 10px",borderRadius:6}}, "\u30E1\u30E2: ", pcNote),
+            pcFindings.length > 0 ? React.createElement("table", {style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+              React.createElement("thead", null, React.createElement("tr", {style:{background:"#f3f4f6"}},
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u65E5\u4ED8"),
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u5DE6\u5375\u5DE3"),
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u53F3\u5375\u5DE3"),
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u5B50\u5BAE"),
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u51E6\u7F6E"),
+                React.createElement("th", {style:{padding:"6px 8px",textAlign:"left"}}, "\u30E1\u30E2")
+              )),
+              React.createElement("tbody", null, pcFindings.map(function(f, fi) {
+                var bm = typeof INIT_BREEDING_TREATMENTS !== "undefined" ? INIT_BREEDING_TREATMENTS : [];
+                var procs = (f.procedures||[]).map(function(pid){var m=bm.find(function(x){return x.id===pid});return m?m.name:"";}).filter(Boolean).join(", ");
+                return React.createElement("tr", {key:fi,style:{borderTop:"1px solid #f3f4f6"}},
+                  React.createElement("td", {style:{padding:"4px 8px",whiteSpace:"nowrap"}}, f.date || ""),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, [f.ovL, f.ovL2].filter(Boolean).join("/"), f.ovLObs ? " "+f.ovLObs : ""),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, [f.ovR, f.ovR2].filter(Boolean).join("/"), f.ovRObs ? " "+f.ovRObs : ""),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, [f.edema?"浮腫"+f.edema:"", f.tone?"緊張"+f.tone:"", f.uterusObs||""].filter(Boolean).join(" ")),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, procs),
+                  React.createElement("td", {style:{padding:"4px 8px",color:"#6b7280"}}, f.memo || "")
+                );
+              }))
+            ) : React.createElement("p", {style:{fontSize:12,color:"#9ca3af"}}, "\u6240\u898B\u8A18\u9332\u306A\u3057")
+          )
+        );
+      })
+    );
+  })());
 }
 
 // ═══════════════ BILLING (per-farm, separate accounting) ═══════════════
@@ -12297,12 +12334,23 @@ function PharmaInputPage({
   onSave,
   horses,
   farms,
+  cases,
   drugsMaster,
   onAddHorse,
   onAddFarm,
   lastAddedHorseId,
   currentVet
 }) {
+  // 牧場・馬の利用頻度計算
+  var farmUsage = {}, horseUsage = {};
+  (cases || []).forEach(function(c) {
+    if (c.horseId) horseUsage[c.horseId] = (horseUsage[c.horseId] || 0) + 1;
+    var fId = c.farmId;
+    if (!fId && c.horseId) { var hh = horses.find(function(x){return x.id===c.horseId}); if (hh) fId = hh.farmId; }
+    if (fId) farmUsage[fId] = (farmUsage[fId] || 0) + 1;
+  });
+  var sortedHorses = horses.slice().filter(function(h){return !h.archived}).sort(function(a,b){ return (horseUsage[b.id]||0) - (horseUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
+  var sortedFarms = farms.slice().filter(function(f){return !f.archived}).sort(function(a,b){ return (farmUsage[b.id]||0) - (farmUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
   const caseIdRef = useRef(kase?.id || Date.now());
   const [openDate, setOpenDate] = useState(kase?.openDate || new Date().toISOString().split("T")[0]);
   const [useHorse, setUseHorse] = useState(kase?.horseId ? true : false);
@@ -12463,22 +12511,21 @@ function PharmaInputPage({
   }, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
   }, "\u99AC\u540D"), /*#__PURE__*/React.createElement(SearchBox, {
-    items: horses,
+    items: sortedHorses,
     value: Number(selectedHorse) || 0,
     onSelect: id => setSelectedHorse(String(id)),
     placeholder: "\u99AC\u540D\u3067\u691C\u7D22...",
     getLabel: h => h.name + " (" + (farms.find(f => f.id === h.farmId)?.name || "") + ")",
-    renderItem: h => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    renderItem: h => /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:6}}, /*#__PURE__*/React.createElement("span", {
       style: {
         fontWeight: 600
       }
     }, h.name), /*#__PURE__*/React.createElement("span", {
       style: {
         color: "#6b7280",
-        fontSize: 11,
-        marginLeft: 6
+        fontSize: 11
       }
-    }, farms.find(f => f.id === h.farmId)?.name))
+    }, farms.find(f => f.id === h.farmId)?.name), horseUsage[h.id] && /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#9ca3af"}}, horseUsage[h.id]+"回"))
   }), /*#__PURE__*/React.createElement("div", {
     style: {display:"flex", gap:6, marginTop:6}
   }, onAddHorse && /*#__PURE__*/React.createElement("button", {
@@ -12500,22 +12547,21 @@ function PharmaInputPage({
   }, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
   }, "\u7267\u5834\uFF08\u99AC\u306A\u3057 \u2014 \u7267\u5834\u76F4\u63A5\u6307\u5B9A\uFF09"), /*#__PURE__*/React.createElement(SearchBox, {
-    items: farms,
+    items: sortedFarms,
     value: Number(selectedFarm) || 0,
     onSelect: id => setSelectedFarm(String(id)),
     placeholder: "\u7267\u5834\u540D\u3067\u691C\u7D22...",
     getLabel: f => f.name + (f.owner ? " (" + f.owner + ")" : ""),
-    renderItem: f => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    renderItem: f => /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:6}}, /*#__PURE__*/React.createElement("span", {
       style: {
         fontWeight: 600
       }
     }, f.name), f.owner && /*#__PURE__*/React.createElement("span", {
       style: {
         color: "#6b7280",
-        fontSize: 11,
-        marginLeft: 6
+        fontSize: 11
       }
-    }, f.owner))
+    }, f.owner), farmUsage[f.id] && /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#9ca3af"}}, farmUsage[f.id]+"回"))
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
   }, "\u30E1\u30E2"), /*#__PURE__*/React.createElement("textarea", {
@@ -12568,6 +12614,7 @@ function PharmaInputPage({
       }
     }, /*#__PURE__*/React.createElement(DrugSearchBox, {
       drugsMaster: drugsMaster,
+      cases: cases,
       value: row.drugId,
       onSelect: id => {
         const dr = drugsMaster.find(x => x.id === id);
@@ -12822,6 +12869,8 @@ function App() {
   const [showDrugModal, setShowDrugModal] = useState(false);
   const [editingDrug, setEditingDrug] = useState(null);
   const [lastAddedHorseId, setLastAddedHorseId] = useState(null);
+  const [newBreedingKey, setNewBreedingKey] = useState(0);
+  const [newGeneralKey, setNewGeneralKey] = useState(0);
   const [vets, setVets] = useState(() => persistedData?.vets || ["佐藤", "關"]);
   const [currentVet, setCurrentVet] = useState(() => persistedData?.currentVet || "佐藤");
   const addVet = (name) => { if (!vets.includes(name)) { setVets(prev => [...prev, name]); } };
@@ -13138,7 +13187,7 @@ function App() {
           onOpenCase: openCase
         });
       case "general_new":
-        return /*#__PURE__*/React.createElement(GeneralKartePage, {
+        return /*#__PURE__*/React.createElement(GeneralKartePage, {key:"gn"+newGeneralKey,
           horses: horses,
           farms: farms,
           drugsMaster: drugsMaster,
@@ -13182,7 +13231,7 @@ function App() {
           cases: cases,
           horses: horses,
           farms: farms,
-          onNav: setPage,
+          onNav: function(p){ if(p==="breeding_input"){ setLastAddedHorseId(null); setEditingCase(null); setNewBreedingKey(function(k){return k+1}); } setPage(p); },
           onOpenCase: openCase,
           onBulkArchive: bulkArchiveBreeding,
           onYearCarryover: yearCarryover,
@@ -13197,7 +13246,7 @@ function App() {
           sortDir: bSortDir, setSortDir: setBSortDir
         }));
       case "breeding_input":
-        return /*#__PURE__*/React.createElement(ErrorBoundary, {key:"bi"}, /*#__PURE__*/React.createElement(BreedingInputPage, {
+        return /*#__PURE__*/React.createElement(ErrorBoundary, {key:"bi"+newBreedingKey}, /*#__PURE__*/React.createElement(BreedingInputPage, {
           onBack: () => setPage("breeding"),
           onSave: saveCase,
           horses: horses,
@@ -13218,6 +13267,7 @@ function App() {
           },
           backLabel: bFilterLabel ? "← 一覧に戻る（" + bFilterLabel + "）" : null,
           onSave: saveCase,
+          onDelete: deleteCase,
           horses: horses,
           farms: farms,
           cases: cases,
@@ -13234,6 +13284,7 @@ function App() {
           onSave: saveCase,
           horses: horses,
           farms: farms,
+          cases: cases,
           drugsMaster: drugsMaster,
           onAddHorse: () => setShowNewHorse(true),
           onAddFarm: () => setShowNewFarm(true),
@@ -13250,6 +13301,7 @@ function App() {
           onSave: saveCase,
           horses: horses,
           farms: farms,
+          cases: cases,
           drugsMaster: drugsMaster,
           onAddHorse: () => setShowNewHorse(true),
           onAddFarm: () => setShowNewFarm(true),
@@ -13520,7 +13572,7 @@ function App() {
       }
     }, "\u4E00\u822C\u8A3A\u7642"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-primary",
-      onClick: () => { setLastAddedHorseId(null); setPage("general_new"); }
+      onClick: () => { setLastAddedHorseId(null); setEditingCase(null); setNewGeneralKey(function(k){return k+1}); setPage("general_new"); }
     }, "\uFF0B \u65B0\u898F\u30AB\u30EB\u30C6")), /*#__PURE__*/React.createElement("p", {
       style: {
         fontSize: 12,
