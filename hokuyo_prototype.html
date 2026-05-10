@@ -205,7 +205,6 @@ function firestoreWrite(docName, data) {
   _writeTimers[docName] = setTimeout(function() {
     var d = _writeQueue[docName];
     delete _writeQueue[docName];
-    _setSyncStatus("syncing");
     // casesは大きいのでチャンク分割
     if (docName === "cases" && Array.isArray(d) && d.length > 200) {
       _writeCasesChunked(d);
