@@ -14360,22 +14360,12 @@ function App() {
     return function() { unsubStatus(); };
   }, []);
 
-  // Persist data to LocalStorage AND Firebase whenever key state changes
+  // Persist data to LocalStorage whenever key state changes
   React.useEffect(() => {
     const dataToStore = {
-      farms,
-      horses,
-      drugsMaster,
-      treatmentsMaster,
-      cases,
-      payments,
-      currentVet,
-      vets,
-      closedMonths,
-      billingActual,
-      breedingTreatments,
-      purchaseHistory,
-      insuranceList
+      farms, horses, drugsMaster, treatmentsMaster, cases, payments,
+      currentVet, vets, closedMonths, billingActual, breedingTreatments,
+      purchaseHistory, insuranceList
     };
     try {
       localStorage.setItem("hokuyo_clinic_data", JSON.stringify(dataToStore));
@@ -14383,23 +14373,22 @@ function App() {
     } catch (e) {
       console.error("Failed to persist data:", e);
     }
-    // Firebase同期: 各データを個別にFirestoreへ書き込み
-    if (FIREBASE_ENABLED) {
-      firestoreWrite("farms", farms);
-      firestoreWrite("horses", horses);
-      firestoreWrite("drugsMaster", drugsMaster);
-      firestoreWrite("treatmentsMaster", treatmentsMaster);
-      firestoreWrite("breedingTreatments", breedingTreatments);
-      firestoreWrite("cases", cases);
-      firestoreWrite("payments", payments);
-      firestoreWrite("billingActual", billingActual);
-      firestoreWrite("purchaseHistory", purchaseHistory);
-      firestoreWrite("closedMonths", closedMonths);
-      firestoreWrite("insuranceList", insuranceList);
-      firestoreWrite("vets", vets);
-      firestoreWrite("currentVet", currentVet);
-    }
   }, [farms, horses, drugsMaster, treatmentsMaster, cases, payments, currentVet, vets, closedMonths, billingActual, breedingTreatments, purchaseHistory, insuranceList]);
+
+  // Firebase同期: 各データ項目を個別に監視・書き込み（他の項目を巻き込まない）
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("farms", farms); }, [farms]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("horses", horses); }, [horses]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("drugsMaster", drugsMaster); }, [drugsMaster]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("treatmentsMaster", treatmentsMaster); }, [treatmentsMaster]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("breedingTreatments", breedingTreatments); }, [breedingTreatments]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("cases", cases); }, [cases]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("payments", payments); }, [payments]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("billingActual", billingActual); }, [billingActual]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("purchaseHistory", purchaseHistory); }, [purchaseHistory]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("closedMonths", closedMonths); }, [closedMonths]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("currentVet", currentVet); }, [currentVet]);
 
   // Reset data function
   const resetAllData = () => {
