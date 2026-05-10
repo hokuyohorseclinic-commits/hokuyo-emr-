@@ -314,17 +314,27 @@ function startFirestoreListeners() {
         }
       }, function(err) {
         console.error("[Firebase] リスナーエラー (" + docName + "):", err);
+        // エラーでも初回カウントを進める
+        if (!_initialSnapshotReceived[docName]) {
+          _initialSnapshotReceived[docName] = true;
+          _initialSnapshotCount++;
+          if (_initialSnapshotCount >= SYNC_FIELDS.length) {
+            _firestoreWriteEnabled = true;
+            _setSyncStatus("online");
+          }
+        }
         _setSyncStatus("error");
       });
     _firestoreUnsubscribers.push(unsub);
   });
-  // フォールバック: 10秒経っても初回ロードが完了しない場合は書き込みを許可
+  // フォールバック: 5秒経っても初回ロードが完了しない場合は書き込みを許可
   setTimeout(function() {
     if (!_firestoreWriteEnabled) {
-      console.log("[Firebase] フォールバック: 10秒タイムアウト — 書き込み有効化");
+      console.log("[Firebase] フォールバック: 5秒タイムアウト — 書き込み有効化");
       _firestoreWriteEnabled = true;
+      _setSyncStatus("online");
     }
-  }, 10000);
+  }, 5000);
   console.log("[Firebase] リアルタイムリスナー開始 (" + SYNC_FIELDS.length + " ドキュメント)");
 }
 
