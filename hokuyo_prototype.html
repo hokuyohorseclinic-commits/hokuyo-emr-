@@ -191,9 +191,16 @@ var SYNC_FIELDS = [
 // ─── Firestore 書き込み（デバウンス付き） ───
 var _writeTimers = {};
 var _writeQueue = {};
+var _skipNextWrite = {}; // リモート受信後のuseEffect書き戻し防止フラグ
 
 function firestoreWrite(docName, data) {
   if (!FIREBASE_ENABLED || !firebaseDB) return;
+  // リモート更新によるsetState → useEffect発火の場合はスキップ（ピンポン防止）
+  if (_skipNextWrite[docName]) {
+    console.log("[Firebase] リモート受信後の書き戻しスキップ: " + docName);
+    delete _skipNextWrite[docName];
+    return;
+  }
   // 初回ロード完了まで書き込みを禁止（古いlocalStorageデータで上書きしない）
   if (!_firestoreWriteEnabled) {
     console.log("[Firebase] 初回ロード中のため書き込みスキップ: " + docName);
@@ -214,7 +221,7 @@ function firestoreWrite(docName, data) {
       data: d,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-05e"
+      dataVersion: "2026-05-10a"
     }).then(function() {
       _setSyncStatus("online");
     }).catch(function(err) {
@@ -237,7 +244,7 @@ function _writeCasesChunked(casesArr) {
     totalCount: casesArr.length,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: _deviceId,
-    dataVersion: "2026-05-05e"
+    dataVersion: "2026-05-10a"
   });
   // 各チャンクを別ドキュメントに
   for (var i = 0; i < totalChunks; i++) {
@@ -299,6 +306,8 @@ function startFirestoreListeners() {
         if (docName === "cases" && docData.chunked) {
           _loadCasesChunked(docData.totalChunks).then(function(allCases) {
             if (_remoteUpdateCallbacks["cases"]) {
+              // setState後のuseEffectによる書き戻しを防止
+              _skipNextWrite["cases"] = true;
               _remoteUpdateCallbacks["cases"](allCases);
             }
             _setSyncStatus("online");
@@ -308,6 +317,8 @@ function startFirestoreListeners() {
 
         if (docData.data !== undefined && _remoteUpdateCallbacks[docName]) {
           console.log("[Firebase] リモート更新受信: " + docName + " (from " + docData.updatedBy + ")");
+          // setState後のuseEffectによる書き戻しを防止（ピンポンループ防止）
+          _skipNextWrite[docName] = true;
           _remoteUpdateCallbacks[docName](docData.data);
           _setSyncStatus("online");
         }
@@ -426,7 +437,7 @@ function _uploadAllToFirestore(localData) {
       data: localData[key],
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-05e"
+      dataVersion: "2026-05-10a"
     });
   });
   var p = batch.commit();
@@ -14232,7 +14243,7 @@ function App() {
   // State with lazy initialization from LocalStorage
   const [page, setPage] = useState("dashboard");
   // データバージョン管理: バージョンが変わるとINITデータで強制上書き
-  const DATA_VERSION = "2026-05-05e";
+  const DATA_VERSION = "2026-05-10a";
   const dataVersionMatch = localStorage.getItem("hokuyo_data_version") === DATA_VERSION;
   if (!dataVersionMatch) {
     localStorage.setItem("hokuyo_data_version", DATA_VERSION);
@@ -14338,21 +14349,20 @@ function App() {
   React.useEffect(() => {
     if (!FIREBASE_ENABLED) return;
     // 各データのリモート更新コールバックを登録
-    // _ignoreRemote フラグでローカル更新時のループを防止
-    var _ignoreRemote = {};
-    registerRemoteUpdateCallback("farms", function(d) { if (!_ignoreRemote.farms) setFarms(d); });
-    registerRemoteUpdateCallback("horses", function(d) { if (!_ignoreRemote.horses) setHorses(d); });
-    registerRemoteUpdateCallback("drugsMaster", function(d) { if (!_ignoreRemote.drugsMaster) setDrugsMaster(d); });
-    registerRemoteUpdateCallback("treatmentsMaster", function(d) { if (!_ignoreRemote.treatmentsMaster) setTreatmentsMaster(d); });
-    registerRemoteUpdateCallback("breedingTreatments", function(d) { if (!_ignoreRemote.breedingTreatments) { setBreedingTreatments(d); INIT_BREEDING_TREATMENTS = d; } });
-    registerRemoteUpdateCallback("cases", function(d) { if (!_ignoreRemote.cases) setCases(d); });
-    registerRemoteUpdateCallback("payments", function(d) { if (!_ignoreRemote.payments) setPayments(d); });
-    registerRemoteUpdateCallback("billingActual", function(d) { if (!_ignoreRemote.billingActual) setBillingActual(d); });
-    registerRemoteUpdateCallback("purchaseHistory", function(d) { if (!_ignoreRemote.purchaseHistory) setPurchaseHistory(d); });
-    registerRemoteUpdateCallback("closedMonths", function(d) { if (!_ignoreRemote.closedMonths) setClosedMonths(d); });
-    registerRemoteUpdateCallback("insuranceList", function(d) { if (!_ignoreRemote.insuranceList) setInsuranceList(d); });
-    registerRemoteUpdateCallback("vets", function(d) { if (!_ignoreRemote.vets) setVets(d); });
-    registerRemoteUpdateCallback("currentVet", function(d) { if (!_ignoreRemote.currentVet) setCurrentVet(d); });
+    // ピンポン防止は _skipNextWrite フラグで firestoreWrite 側で制御
+    registerRemoteUpdateCallback("farms", function(d) { setFarms(d); });
+    registerRemoteUpdateCallback("horses", function(d) { setHorses(d); });
+    registerRemoteUpdateCallback("drugsMaster", function(d) { setDrugsMaster(d); });
+    registerRemoteUpdateCallback("treatmentsMaster", function(d) { setTreatmentsMaster(d); });
+    registerRemoteUpdateCallback("breedingTreatments", function(d) { setBreedingTreatments(d); INIT_BREEDING_TREATMENTS = d; });
+    registerRemoteUpdateCallback("cases", function(d) { setCases(d); });
+    registerRemoteUpdateCallback("payments", function(d) { setPayments(d); });
+    registerRemoteUpdateCallback("billingActual", function(d) { setBillingActual(d); });
+    registerRemoteUpdateCallback("purchaseHistory", function(d) { setPurchaseHistory(d); });
+    registerRemoteUpdateCallback("closedMonths", function(d) { setClosedMonths(d); });
+    registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
+    registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
+    registerRemoteUpdateCallback("currentVet", function(d) { setCurrentVet(d); });
     // 同期ステータスリスナー
     var unsubStatus = onSyncStatusChange(function(s) { setSyncStatus(s); });
     // リアルタイムリスナー開始
@@ -15978,13 +15988,26 @@ ReactDOM.render(/*#__PURE__*/React.createElement(App, null), document.getElement
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
     const swCode = `
-      const CACHE_NAME = 'hokuyo-v1';
+      const CACHE_NAME = 'hokuyo-v7';
       self.addEventListener('install', e => {
         e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(['./', 'hokuyo_prototype.html'])));
         self.skipWaiting();
       });
+      self.addEventListener('activate', e => {
+        e.waitUntil(
+          caches.keys().then(names => Promise.all(
+            names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n))
+          )).then(() => self.clients.claim())
+        );
+      });
       self.addEventListener('fetch', e => {
-        e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+        e.respondWith(
+          fetch(e.request).then(res => {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+            return res;
+          }).catch(() => caches.match(e.request))
+        );
       });
     `;
     const blob = new Blob([swCode], {type: 'application/javascript'});
