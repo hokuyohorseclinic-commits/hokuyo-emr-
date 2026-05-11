@@ -96,6 +96,15 @@ var _syncStatusListeners = [];
 var _lastSyncTime = null;
 var _firestoreWriteEnabled = false; // 初回ロード完了まで書き込み禁止
 var _initialSnapshotCount = 0; // 初回onSnapshot受信カウンター
+var _debugLog = []; // デバッグログ（画面表示用）
+var _lastWriteInfo = "なし";
+var _lastReceiveInfo = "なし";
+function _addDebug(msg) {
+  var t = new Date().toLocaleTimeString("ja-JP");
+  _debugLog.push(t + " " + msg);
+  if (_debugLog.length > 20) _debugLog.shift();
+  console.log("[Debug] " + msg);
+}
 var _deviceId = (function() {
   var id = localStorage.getItem("hokuyo_device_id");
   if (!id) {
@@ -126,15 +135,13 @@ function initFirebase() {
   try {
     var app = firebase.initializeApp(firebaseConfig);
     firebaseDB = firebase.firestore();
-    // オフライン永続化を有効化（iPadオフライン対応の要）
-    firebaseDB.enablePersistence({ synchronizeTabs: true })
-      .then(function() { console.log("[Firebase] オフライン永続化: 有効"); })
+    // オフライン永続化（iOS Safari対応: synchronizeTabsなし）
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    var persistOptions = isIOS ? {} : { synchronizeTabs: true };
+    firebaseDB.enablePersistence(persistOptions)
+      .then(function() { console.log("[Firebase] オフライン永続化: 有効 (iOS=" + isIOS + ")"); })
       .catch(function(err) {
-        if (err.code === "failed-precondition") {
-          console.warn("[Firebase] 複数タブが開いています。永続化は1タブのみ有効です。");
-        } else if (err.code === "unimplemented") {
-          console.warn("[Firebase] このブラウザはオフライン永続化に非対応です。");
-        }
+        console.warn("[Firebase] 永続化エラー: " + err.code + " - " + err.message);
       });
     FIREBASE_ENABLED = true;
     _setSyncStatus("online");
@@ -197,23 +204,22 @@ function firestoreWrite(docName, data) {
   if (!FIREBASE_ENABLED || !firebaseDB) return;
   // リモート更新によるsetState → useEffect発火の場合はスキップ（ピンポン防止）
   if (_skipNextWrite[docName]) {
-    console.log("[Firebase] リモート受信後の書き戻しスキップ: " + docName);
+    _addDebug("書き戻しスキップ: " + docName);
     delete _skipNextWrite[docName];
     return;
   }
-  // 初回ロード完了まで書き込みを禁止（古いlocalStorageデータで上書きしない）
   if (!_firestoreWriteEnabled) {
-    console.log("[Firebase] 初回ロード中のため書き込みスキップ: " + docName);
+    _addDebug("初回ロード中スキップ: " + docName);
     return;
   }
-  // デバウンス: 同じドキュメントへの連続書き込みを500msでまとめる
+  _addDebug("書き込み開始: " + docName);
   _writeQueue[docName] = data;
   if (_writeTimers[docName]) clearTimeout(_writeTimers[docName]);
   _writeTimers[docName] = setTimeout(function() {
     var d = _writeQueue[docName];
     delete _writeQueue[docName];
-    // casesは大きいのでチャンク分割
     if (docName === "cases" && Array.isArray(d) && d.length > 200) {
+      _addDebug("casesチャンク書き込み: " + d.length + "件");
       _writeCasesChunked(d);
       return;
     }
@@ -221,11 +227,13 @@ function firestoreWrite(docName, data) {
       data: d,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-10a"
+      dataVersion: "2026-05-05e"
     }).then(function() {
+      _lastWriteInfo = docName + " @ " + new Date().toLocaleTimeString("ja-JP");
+      _addDebug("書き込み成功: " + docName);
       _setSyncStatus("online");
     }).catch(function(err) {
-      console.error("[Firebase] 書き込みエラー (" + docName + "):", err);
+      _addDebug("書き込みエラー: " + docName + " - " + err.message);
       _setSyncStatus("error");
     });
   }, 500);
@@ -244,7 +252,7 @@ function _writeCasesChunked(casesArr) {
     totalCount: casesArr.length,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: _deviceId,
-    dataVersion: "2026-05-10a"
+    dataVersion: "2026-05-05e"
   });
   // 各チャンクを別ドキュメントに
   for (var i = 0; i < totalChunks; i++) {
@@ -289,8 +297,7 @@ function startFirestoreListeners() {
           _initialSnapshotReceived[docName] = true;
           _initialSnapshotCount++;
           if (_initialSnapshotCount >= SYNC_FIELDS.length) {
-            // 全ドキュメントの初回snapshotを受信完了 → 書き込み許可
-            console.log("[Firebase] 初回ロード完了 — 書き込み有効化");
+            _addDebug("初回ロード完了 — 書き込み有効化");
             _firestoreWriteEnabled = true;
             _setSyncStatus("online");
           }
@@ -316,8 +323,8 @@ function startFirestoreListeners() {
         }
 
         if (docData.data !== undefined && _remoteUpdateCallbacks[docName]) {
-          console.log("[Firebase] リモート更新受信: " + docName + " (from " + docData.updatedBy + ")");
-          // setState後のuseEffectによる書き戻しを防止（ピンポンループ防止）
+          _lastReceiveInfo = docName + " from " + (docData.updatedBy || "?").substr(-8) + " @ " + new Date().toLocaleTimeString("ja-JP");
+          _addDebug("受信: " + docName + " (from " + (docData.updatedBy || "?").substr(-8) + ")");
           _skipNextWrite[docName] = true;
           _remoteUpdateCallbacks[docName](docData.data);
           _setSyncStatus("online");
@@ -437,7 +444,7 @@ function _uploadAllToFirestore(localData) {
       data: localData[key],
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-10a"
+      dataVersion: "2026-05-05e"
     });
   });
   var p = batch.commit();
@@ -14243,7 +14250,7 @@ function App() {
   // State with lazy initialization from LocalStorage
   const [page, setPage] = useState("dashboard");
   // データバージョン管理: バージョンが変わるとINITデータで強制上書き
-  const DATA_VERSION = "2026-05-10a";
+  const DATA_VERSION = "2026-05-05e";
   const dataVersionMatch = localStorage.getItem("hokuyo_data_version") === DATA_VERSION;
   if (!dataVersionMatch) {
     localStorage.setItem("hokuyo_data_version", DATA_VERSION);
@@ -15937,15 +15944,31 @@ function App() {
       };
       var s = statusMap[syncStatus] || statusMap.local;
       return React.createElement("div", {
-        style: {
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "4px 8px", borderRadius: 6,
-          background: s.bg, fontSize: 10, color: s.color, fontWeight: 600
+        style: { cursor: "pointer" },
+        onClick: function() {
+          var info = "=== Firebase診断 ===\n" +
+            "デバイスID: " + _deviceId.substr(-10) + "\n" +
+            "状態: " + _syncStatus + "\n" +
+            "書き込み許可: " + _firestoreWriteEnabled + "\n" +
+            "Firebase有効: " + FIREBASE_ENABLED + "\n" +
+            "DB接続: " + (firebaseDB ? "あり" : "なし") + "\n" +
+            "最終書き込み: " + _lastWriteInfo + "\n" +
+            "最終受信: " + _lastReceiveInfo + "\n" +
+            "--- ログ ---\n" + _debugLog.slice(-10).join("\n");
+          alert(info);
         }
-      }, React.createElement("span", {
-        style: { width: 6, height: 6, borderRadius: "50%", background: s.color, display: "inline-block",
-          animation: syncStatus === "syncing" ? "pulse 1.5s infinite" : "none" }
-      }), s.text, _lastSyncTime ? " (" + _lastSyncTime.toLocaleTimeString("ja-JP", {hour:"2-digit",minute:"2-digit"}) + ")" : "");
+      },
+        React.createElement("div", {
+          style: {
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "4px 8px", borderRadius: 6,
+            background: s.bg, fontSize: 10, color: s.color, fontWeight: 600
+          }
+        }, React.createElement("span", {
+          style: { width: 6, height: 6, borderRadius: "50%", background: s.color, display: "inline-block",
+            animation: syncStatus === "syncing" ? "pulse 1.5s infinite" : "none" }
+        }), s.text, _lastSyncTime ? " (" + _lastSyncTime.toLocaleTimeString("ja-JP", {hour:"2-digit",minute:"2-digit"}) + ")" : "")
+      );
     })()
   }), /*#__PURE__*/React.createElement("div", {
     style: {
