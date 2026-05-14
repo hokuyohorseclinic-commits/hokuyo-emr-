@@ -3833,6 +3833,7 @@ if(c.type==="繁殖"&&typeof INIT_BREEDING_TREATMENTS!=="undefined")return calcB
 return 0;
 }
 function daysBetween(a,b){return Math.floor((new Date(b)-new Date(a))/86400000);}
+function todayJST(){var d=new Date();d.setMinutes(d.getMinutes()+d.getTimezoneOffset()+540);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 // 薬品カテゴリ自動判定
 
 function calcBreedingVisitTotal(finding, bm) {
@@ -7958,7 +7959,7 @@ function BreedingListPage({
     return h ? farms.find(f => f.id === h.farmId)?.name : "";
   }).filter(Boolean))];
   const statuses = [...new Set(breedingCases.map(c => c.breedingStatus || "未設定").filter(Boolean))];
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayJST();
   const enriched = breedingCases.map(c => {
     const h = horses.find(x => x.id === c.horseId);
     const f = h ? farms.find(x => x.id === h.farmId) : null;
@@ -8777,12 +8778,12 @@ function BreedingInputPage({
     if (kase?.findings && kase.findings.length > 0) {
       return kase.findings.map(normalizeFinding);
     }
-    return [normalizeFinding({date: new Date().toISOString().split("T")[0]})];
+    return [normalizeFinding({date: todayJST()})];
   });
   const horse = horses.find(h => h.id === Number(selectedHorse));
   const farm = horse ? farms.find(f => f.id === horse.farmId) : null;
   const addF = () => setFindings(p => {
-    const newF = normalizeFinding({date: new Date().toISOString().split("T")[0]});
+    const newF = normalizeFinding({date: todayJST()});
     // 新規行を一番上（最新日付順の先頭）に追加
     return [newF, ...p].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   });
@@ -8797,7 +8798,7 @@ function BreedingInputPage({
 
   // Auto-derive scheduledExam from findings and status
   useEffect(() => {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = todayJST();
     // 種付中: 鑑定日 = 種付け翌日から15日目（handleInsemToggleで設定済み、ここでは上書きしない）
     if (bStatus === "種付中" && insDate) return;
     // 受胎: 次の再鑑定マイルストーン（28/35/49/63日目）
@@ -8921,7 +8922,7 @@ function BreedingInputPage({
       setBStatus("受胎");
       // insDate はそのまま保持（胎齢計算に使用）
       // 受胎確認 → 次の再鑑定マイルストーン（28/35/49/63日目）をセット
-      const todayStr = new Date().toISOString().split("T")[0];
+      const todayStr = todayJST();
       const nextRE = calcNextReExam(insDate, todayStr);
       if (nextRE) {
         setExamDate(nextRE.date);
@@ -8940,7 +8941,7 @@ function BreedingInputPage({
       setScheduledExam("");
     }
   };
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayJST();
   // 受胎時の胎齢: 種付け翌日を1日目としてカウント
   const fetalAge = (bStatus === "受胎" && insDate) ? (daysBetween(insDate, today)) + "日" : "—";
   const daysPost = foalDate ? daysBetween(foalDate, today) + "日" : "—";
@@ -9606,7 +9607,7 @@ function BillingPage({
   const [searchFarm, setSearchFarm] = useState("");
   const [billingTab, setBillingTab] = useState("actual"); // actual, invoice, ledger, payment
   const [showPayForm, setShowPayForm] = useState(null); // farmId for payment form
-  const [payDate, setPayDate] = useState(new Date().toISOString().split("T")[0]);
+  const [payDate, setPayDate] = useState(todayJST());
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("振込");
   const [payMemo, setPayMemo] = useState("");
@@ -9885,7 +9886,7 @@ function BillingPage({
     const newPay = {
       id: Date.now(),
       farmId: fb.farm.id,
-      date: new Date().toISOString().split("T")[0],
+      date: todayJST(),
       amount: balance,
       method: "振込",
       memo: "全額入金"
@@ -9905,7 +9906,7 @@ function BillingPage({
     const newPay = {
       id: Date.now(),
       farmId: fb.farm.id,
-      date: new Date().toISOString().split("T")[0],
+      date: todayJST(),
       amount: amt,
       method: "振込",
       memo: "一部入金"
@@ -10283,7 +10284,7 @@ function BillingPage({
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>領収書 - ${fb.farm.name}</title><style>${pdfStyle} .receipt-box{border:3px double #111;padding:30px;margin:20px 0;}</style></head><body>
     <div class="no-print" style="text-align:center;margin:10px;"><button onclick="window.print()" style="padding:10px 30px;font-size:14pt;cursor:pointer;background:#16a34a;color:#fff;border:none;border-radius:6px;">🖨 印刷 / PDF保存</button></div>
     <div class="receipt-box">
-    <div style="text-align:center;margin-bottom:10px;"><img src="${CLINIC_LOGO_B64}" style="height:60px;" /><div style="font-size:13pt;font-weight:bold;">北洋ホースクリニック</div><div style="font-size:9pt;">〒056-0144 北海道日高郡新ひだか町静内田原569 ｜ TEL 0146-46-2356<br>獣医師 佐藤和茂 ｜ 発行日: ${new Date().toISOString().split("T")[0]}</div></div>
+    <div style="text-align:center;margin-bottom:10px;"><img src="${CLINIC_LOGO_B64}" style="height:60px;" /><div style="font-size:13pt;font-weight:bold;">北洋ホースクリニック</div><div style="font-size:9pt;">〒056-0144 北海道日高郡新ひだか町静内田原569 ｜ TEL 0146-46-2356<br>獣医師 佐藤和茂 ｜ 発行日: ${todayJST()}</div></div>
     <div style="text-align:center;margin-bottom:14px;"><h1 style="font-size:20pt;letter-spacing:6px;margin:0;">領 収 書</h1></div>
     <div style="display:flex;justify-content:space-between;margin-bottom:12px;"><div><div style="font-size:15pt;font-weight:bold;border-bottom:2px solid #111;padding-bottom:3px;">${fb.farm.name} 様</div></div></div>
     <div style="border:2px solid #16a34a;background:#f0fdf4;border-radius:8px;padding:16px 24px;text-align:center;margin:16px 0;font-size:18pt;font-weight:bold;">領収金額　¥${fb.monthPayments.toLocaleString()}</div>
@@ -13320,7 +13321,7 @@ function PharmaInputPage({
   var sortedHorses = horses.slice().filter(function(h){return !h.archived}).sort(function(a,b){ return (horseUsage[b.id]||0) - (horseUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
   var sortedFarms = farms.slice().filter(function(f){return !f.archived}).sort(function(a,b){ return (farmUsage[b.id]||0) - (farmUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
   const caseIdRef = useRef(kase?.id || Date.now());
-  const [openDate, setOpenDate] = useState(kase?.openDate || new Date().toISOString().split("T")[0]);
+  const [openDate, setOpenDate] = useState(kase?.openDate || todayJST());
   const [useHorse, setUseHorse] = useState(kase?.horseId ? true : false);
   const [selectedHorse, setSelectedHorse] = useState(kase ? String(kase.horseId) : "");
   const [selectedFarm, setSelectedFarm] = useState(kase?.farmId ? String(kase.farmId) : "");
@@ -14506,7 +14507,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "hokuyo_backup_" + new Date().toISOString().split("T")[0] + ".json";
+    a.download = "hokuyo_backup_" + todayJST() + ".json";
     a.click();
     URL.revokeObjectURL(url);
     alert("データをエクスポートしました");
