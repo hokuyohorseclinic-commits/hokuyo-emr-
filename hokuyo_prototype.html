@@ -6811,7 +6811,7 @@ function GeneralKartePage({
   const [diagnosis, setDiagnosis] = useState(kase?.diagnosis || "");
   const [caseStatus, setCaseStatus] = useState(kase?.caseStatus || "\u8A3A\u7642\u7D42\u4E86");
   const pastVisits = kase?.visits || [];
-  const [visitDate, setVisitDate] = useState(new Date().toISOString().slice(0,10));
+  const [visitDate, setVisitDate] = useState(todayJST());
   const [visitType, setVisitType] = useState(isNew ? "\u521D\u8A3A" : "");
   const visitFee = visitType === "\u521D\u8A3A" ? 2000 : visitType === "\u518D\u8A3A" ? 1000 : 0;
   const [editVisitIdx, setEditVisitIdx] = useState(-1);
@@ -6831,7 +6831,7 @@ function GeneralKartePage({
   };
   const cancelEdit = () => {
     setEditVisitIdx(-1);
-    setVisitDate(new Date().toISOString().slice(0,10));
+    setVisitDate(todayJST());
     setVisitType("");
     setSymptoms([]);
     setVitals({t:"",p:"",r:""});
@@ -6960,7 +6960,7 @@ function GeneralKartePage({
     });
     // フォームをリセット（ページは移動しない → 右サイドバーに保存される）
     setEditVisitIdx(-1);
-    setVisitDate(new Date().toISOString().slice(0,10));
+    setVisitDate(todayJST());
     setVisitType("");
     setSymptoms([]);
     setVitals({t:"",p:"",r:""});
@@ -7072,7 +7072,7 @@ function GeneralKartePage({
   })();
 
   // 今月の継続中カルテ（右サイドバー用）
-  const thisMonth = new Date().toISOString().slice(0, 7);
+  const thisMonth = todayJST().slice(0, 7);
   const contCasesThisMonth = cases.filter(c => c.caseStatus === "\u7D99\u7D9A\u4E2D" && c.openDate && c.openDate.slice(0, 7) <= thisMonth && (!kase || c.id !== kase.id));
   const contCasesPanel = contCasesThisMonth.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {marginTop: 16, paddingTop: 12, borderTop: "1px solid #e5e7eb"}
@@ -11980,7 +11980,7 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
 
   // 手動追加モーダル
   var [showAddModal, setShowAddModal] = useState(false);
-  var [addForm, setAddForm] = useState({supplier:"",name:"",spec:"",maker:"",qty:1,unitPrice:0,date:new Date().toISOString().substring(0,10),slipNo:""});
+  var [addForm, setAddForm] = useState({supplier:"",name:"",spec:"",maker:"",qty:1,unitPrice:0,date:todayJST(),slipNo:""});
 
   function handleManualAdd() {
     if (!addForm.supplier) { alert("業者を選択してください"); return; }
@@ -12362,7 +12362,7 @@ function DashboardPage({
   onOpenCase
 }) {
   const contCases = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D");
-  const todayStr = new Date().toISOString().slice(0,10);
+  const todayStr = todayJST();
   const todayCases = cases.filter(c => {
     if (c.type === "\u4E00\u822C") return c.visits?.some(v => v.date === todayStr) || c.caseStatus === "\u7D99\u7D9A\u4E2D";
     return c.openDate === todayStr;
@@ -13707,13 +13707,13 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
   const [certOwner, setCertOwner] = useState("");
   const [certDate, setCertDate] = useState("");
   const [certMethod, setCertMethod] = useState("開放去勢術");
-  const [certIssueDate, setCertIssueDate] = useState(new Date().toISOString().slice(0,10));
+  const [certIssueDate, setCertIssueDate] = useState(todayJST());
   const [certSuggestions, setCertSuggestions] = useState([]);
 
   // 保険診断書 追加フォーム
   const [insAddMode, setInsAddMode] = useState(false);
   const [insHorse, setInsHorse] = useState("");
-  const [insDate, setInsDate] = useState(new Date().toISOString().slice(0,10));
+  const [insDate, setInsDate] = useState(todayJST());
   const [insCompany, setInsCompany] = useState("三井住友");
   const [insMemo, setInsMemo] = useState("");
   const [insSuggestions, setInsSuggestions] = useState([]);
@@ -13768,7 +13768,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
           // 牧場名: farm_mgr (管理者名/牧場名) を使用
           var farmName = rec.farm_mgr || rec.farm_loc || "";
           // 日付: diagIn (診断日) or saved_at
-          var date = rec.diagIn || (rec.saved_at ? rec.saved_at.slice(0,10) : new Date().toISOString().slice(0,10));
+          var date = rec.diagIn || (rec.saved_at ? rec.saved_at.slice(0,10) : todayJST());
           // EMRの馬名マッチを試みる
           var h = horses.find(x => x.name === horseName);
           var f = h ? farms.find(x => x.id === h.farmId) : null;
@@ -14097,7 +14097,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
                               onClick:()=>{
                                 setCertHorse(h?.name||""); setCertOwner(f?.name||"");
                                 setCertSex("牡（せん）"); setCertDate(k.openDate||"");
-                                setCertMethod("開放去勢術"); setCertIssueDate(new Date().toISOString().slice(0,10));
+                                setCertMethod("開放去勢術"); setCertIssueDate(todayJST());
                                 setCertMode("castration");
                               }
                             }, "再印刷")
@@ -14109,7 +14109,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
                               onClick:()=>{
                                 setCertHorse(h?.name||""); setCertOwner(f?.name||"");
                                 setCertSex("牡（せん）"); setCertDate(k.openDate||"");
-                                setCertMethod("開放去勢術"); setCertIssueDate(new Date().toISOString().slice(0,10));
+                                setCertMethod("開放去勢術"); setCertIssueDate(todayJST());
                                 setCertMode("castration");
                               }
                             }, "証明書作成 →"),
