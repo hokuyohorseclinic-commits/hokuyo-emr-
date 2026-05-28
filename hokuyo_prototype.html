@@ -219,14 +219,7 @@ function _autoBackupToFirebase() {
       localStorage.setItem("hokuyo_last_backup", String(now));
       _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件)");
       console.log("[Backup] 自動バックアップ成功: " + backupId);
-
-      // 古いバックアップを削除（7日前以前）
-      var cutoff = new Date(now - 7 * ONE_DAY).toISOString().split("T")[0];
-      firebaseDB.collection("backups")
-        .where("createdAt", "<", new Date(cutoff))
-        .get().then(function(snapshot) {
-          snapshot.forEach(function(doc) { doc.ref.delete(); });
-        }).catch(function() {});
+      // バックアップは永久保持（自動削除なし）
     }).catch(function(err) {
       console.error("[Backup] バックアップエラー:", err);
     });
