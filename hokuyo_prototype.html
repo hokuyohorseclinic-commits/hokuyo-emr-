@@ -98,6 +98,8 @@ var _firestoreWriteEnabled = false; // 初回ロード完了まで書き込み�
 var _initialSnapshotCount = 0; // 初回onSnapshot受信カウンター
 var _debugLog = []; // デバッグログ（画面表示用）
 var _lastWriteInfo = "なし";
+var _firebaseDataCounts = {}; // Firebase側のデータ件数記録（上書き保護用）
+var _lastBackupTime = 0; // 最終バックアップ時刻
 var _lastReceiveInfo = "なし";
 function _addDebug(msg) {
   var t = new Date().toLocaleTimeString("ja-JP");
@@ -154,6 +156,90 @@ function initFirebase() {
     return false;
   }
 }
+
+// ─── ブラウザ閉じる前の保存保護 ───
+window.addEventListener("beforeunload", function() {
+  // 未送信の書き込みキューを即座にフラッシュ
+  if (FIREBASE_ENABLED && firebaseDB && _firestoreWriteEnabled) {
+    Object.keys(_writeQueue).forEach(function(docName) {
+      var d = _writeQueue[docName];
+      if (_writeTimers[docName]) clearTimeout(_writeTimers[docName]);
+      try {
+        // sendBeacon対応: 同期的にFirestoreへ書き込み試行
+        if (docName === "cases" && Array.isArray(d) && d.length > 200) {
+          _writeCasesChunked(d);
+        } else {
+          firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
+            data: d,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedBy: _deviceId,
+            dataVersion: DATA_VERSION || "unknown"
+          });
+        }
+        console.log("[Firebase] beforeunload flush: " + docName);
+      } catch(e) {
+        console.error("[Firebase] beforeunload flush error: " + docName, e);
+      }
+    });
+    _writeQueue = {};
+  }
+});
+
+// ─── 自動バックアップ（1日1回、Firebaseに保存）───
+function _autoBackupToFirebase() {
+  if (!FIREBASE_ENABLED || !firebaseDB || !_firestoreWriteEnabled) return;
+  var now = Date.now();
+  var ONE_DAY = 24 * 60 * 60 * 1000;
+  // 最終バックアップから24時間以内はスキップ
+  var lastBackup = parseInt(localStorage.getItem("hokuyo_last_backup") || "0");
+  if (now - lastBackup < ONE_DAY) return;
+
+  var clinicData = localStorage.getItem("hokuyo_clinic_data");
+  if (!clinicData) return;
+
+  try {
+    var parsed = JSON.parse(clinicData);
+    var casesCount = parsed.cases ? parsed.cases.length : 0;
+    // データが少なすぎる場合はバックアップしない（破損データの保存防止）
+    if (casesCount < 100) {
+      console.log("[Backup] カルテ数が少なすぎるためスキップ: " + casesCount);
+      return;
+    }
+
+    var backupDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+    var backupId = "backup_" + backupDate;
+
+    // バックアップは最大7個保持（1週間分）
+    firebaseDB.collection("backups").doc(backupId).set({
+      data: clinicData,
+      casesCount: casesCount,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      deviceId: _deviceId
+    }).then(function() {
+      localStorage.setItem("hokuyo_last_backup", String(now));
+      _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件)");
+      console.log("[Backup] 自動バックアップ成功: " + backupId);
+
+      // 古いバックアップを削除（7日前以前）
+      var cutoff = new Date(now - 7 * ONE_DAY).toISOString().split("T")[0];
+      firebaseDB.collection("backups")
+        .where("createdAt", "<", new Date(cutoff))
+        .get().then(function(snapshot) {
+          snapshot.forEach(function(doc) { doc.ref.delete(); });
+        }).catch(function() {});
+    }).catch(function(err) {
+      console.error("[Backup] バックアップエラー:", err);
+    });
+  } catch(e) {
+    console.error("[Backup] バックアップ処理エラー:", e);
+  }
+}
+
+// アプリ起動後30秒でバックアップチェック、以降6時間ごと
+setTimeout(function() {
+  _autoBackupToFirebase();
+  setInterval(_autoBackupToFirebase, 6 * 60 * 60 * 1000);
+}, 30000);
 
 // ─── 同期ステータス管理 ───
 function _setSyncStatus(status) {
@@ -212,6 +298,14 @@ function firestoreWrite(docName, data) {
     _addDebug("初回ロード中スキップ: " + docName);
     return;
   }
+  // ★ 上書き保護: ローカルデータがFirebaseより大幅に少ない場合は警告して中止
+  var localCount = Array.isArray(data) ? data.length : -1;
+  var remoteCount = _firebaseDataCounts[docName] || 0;
+  if (localCount >= 0 && remoteCount > 10 && localCount < remoteCount * 0.5) {
+    _addDebug("⚠️ 上書き保護: " + docName + " ローカル" + localCount + "件 < Firebase" + remoteCount + "件の50% — 書き込み中止");
+    console.warn("[Firebase] 上書き保護発動: " + docName + " (ローカル:" + localCount + " / Firebase:" + remoteCount + ")");
+    return;
+  }
   _addDebug("書き込み開始: " + docName);
   _writeQueue[docName] = data;
   if (_writeTimers[docName]) clearTimeout(_writeTimers[docName]);
@@ -227,7 +321,7 @@ function firestoreWrite(docName, data) {
       data: d,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-05e"
+      dataVersion: "2026-05-28a"
     }).then(function() {
       _lastWriteInfo = docName + " @ " + new Date().toLocaleTimeString("ja-JP");
       _addDebug("書き込み成功: " + docName);
@@ -252,7 +346,7 @@ function _writeCasesChunked(casesArr) {
     totalCount: casesArr.length,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: _deviceId,
-    dataVersion: "2026-05-05e"
+    dataVersion: "2026-05-28a"
   });
   // 各チャンクを別ドキュメントに
   for (var i = 0; i < totalChunks; i++) {
@@ -312,6 +406,8 @@ function startFirestoreListeners() {
         // cases チャンク対応
         if (docName === "cases" && docData.chunked) {
           _loadCasesChunked(docData.totalChunks).then(function(allCases) {
+            // ★ Firebase側のcases件数を記録（上書き保護用）
+            _firebaseDataCounts["cases"] = allCases.length;
             if (_remoteUpdateCallbacks["cases"]) {
               // setState後のuseEffectによる書き戻しを防止
               _skipNextWrite["cases"] = true;
@@ -323,6 +419,10 @@ function startFirestoreListeners() {
         }
 
         if (docData.data !== undefined && _remoteUpdateCallbacks[docName]) {
+          // ★ Firebase側のデータ件数を記録（上書き保護用）
+          if (Array.isArray(docData.data)) {
+            _firebaseDataCounts[docName] = docData.data.length;
+          }
           _lastReceiveInfo = docName + " from " + (docData.updatedBy || "?").substr(-8) + " @ " + new Date().toLocaleTimeString("ja-JP");
           _addDebug("受信: " + docName + " (from " + (docData.updatedBy || "?").substr(-8) + ")");
           _skipNextWrite[docName] = true;
@@ -444,7 +544,7 @@ function _uploadAllToFirestore(localData) {
       data: localData[key],
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: _deviceId,
-      dataVersion: "2026-05-05e"
+      dataVersion: "2026-05-28a"
     });
   });
   var p = batch.commit();
@@ -6307,6 +6407,10 @@ function Sidebar({
   onExportData,
   onImportData,
   onExportYearData,
+  onLoadBackups,
+  onRestoreBackup,
+  backupList,
+  loadingBackups,
   syncIndicator
 }) {
   const items = [{
@@ -6550,7 +6654,38 @@ function Sidebar({
       cursor: "pointer",
       width: "100%"
     }
-  }, "\uD83D\uDDD1 \u30C7\u30FC\u30BF\u30EA\u30BB\u30C3\u30C8")));
+  }, "\uD83D\uDDD1 \u30C7\u30FC\u30BF\u30EA\u30BB\u30C3\u30C8"), /*#__PURE__*/React.createElement("button", {
+    onClick: onLoadBackups,
+    style: {
+      padding: "6px 8px",
+      borderRadius: 4,
+      border: "1px solid #0369a1",
+      background: "#0369a1",
+      color: "#bae6fd",
+      fontSize: 11,
+      fontWeight: 500,
+      cursor: "pointer",
+      width: "100%",
+      marginTop: 8
+    }
+  }, loadingBackups ? "\u8AAD\u8FBC\u4E2D..." : "\u2601 \u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u5FA9\u5143"),
+  backupList && backupList.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: 6, padding: 8, background: "#0c4a6e", borderRadius: 6, fontSize: 11 }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { color: "#7dd3fc", marginBottom: 4, fontWeight: 600 } }, "\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u4E00\u89A7:"),
+    backupList.map(function(b) {
+      return /*#__PURE__*/React.createElement("div", {
+        key: b.id,
+        style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderTop: "1px solid #164e63" }
+      },
+        /*#__PURE__*/React.createElement("span", { style: { color: "#bae6fd" } }, b.createdAt + " (" + b.casesCount + "\u4EF6)"),
+        /*#__PURE__*/React.createElement("button", {
+          onClick: function() { onRestoreBackup(b.id); },
+          style: { padding: "2px 8px", borderRadius: 4, border: "none", background: "#059669", color: "#fff", fontSize: 10, cursor: "pointer" }
+        }, "\u5FA9\u5143")
+      );
+    })
+  )));
 }
 
 // ═══════════════ HORSE SEARCH SELECT (with inline registration) ═══════════════
@@ -14250,16 +14385,16 @@ function App() {
 
   // State with lazy initialization from LocalStorage
   const [page, setPage] = useState("dashboard");
-  // データバージョン管理: バージョンが変わるとINITデータで強制上書き
-  const DATA_VERSION = "2026-05-05e";
-  const dataVersionMatch = localStorage.getItem("hokuyo_data_version") === DATA_VERSION;
-  if (!dataVersionMatch) {
+  // データバージョン管理: バージョン変更はログのみ（データは保持する）
+  const DATA_VERSION = "2026-05-28a";
+  const prevVersion = localStorage.getItem("hokuyo_data_version");
+  if (prevVersion !== DATA_VERSION) {
     localStorage.setItem("hokuyo_data_version", DATA_VERSION);
-    // 古いデータをクリアして新しいINITデータを使用
-    localStorage.removeItem("hokuyo_clinic_data");
-    console.log("Data version updated to " + DATA_VERSION + " — re-initializing from INIT data");
+    console.log("Data version updated: " + (prevVersion||"なし") + " → " + DATA_VERSION + " — 既存データは保持");
+    // ★ 安全策: データは削除しない。INITデータのマージは個別フィールドで行う
   }
-  const effectiveData = dataVersionMatch ? persistedData : null;
+  // 既存データがあれば常に優先
+  const effectiveData = persistedData;
   // 牧場マスター: INIT_FARMS更新時に自動反映（バージョンで検知）
   const FARM_MASTER_VERSION = "2026-04-08";
   const [farms, setFarms] = useState(() => {
@@ -14421,6 +14556,44 @@ function App() {
       batch.commit().catch(function(e) { console.error("[Firebase] リセットエラー:", e); });
     }
     window.location.reload();
+  };
+
+  // ─── バックアップ一覧取得・復元機能 ───
+  const [backupList, setBackupList] = useState([]);
+  const [loadingBackups, setLoadingBackups] = useState(false);
+
+  const loadBackupList = () => {
+    if (!FIREBASE_ENABLED || !firebaseDB) { alert("Firebase未接続"); return; }
+    setLoadingBackups(true);
+    firebaseDB.collection("backups").orderBy("createdAt", "desc").limit(7).get()
+      .then(function(snapshot) {
+        var list = [];
+        snapshot.forEach(function(doc) {
+          var d = doc.data();
+          list.push({
+            id: doc.id,
+            casesCount: d.casesCount || 0,
+            createdAt: d.createdAt ? new Date(d.createdAt.seconds * 1000).toLocaleString("ja-JP") : "不明",
+            deviceId: (d.deviceId || "").substr(-8)
+          });
+        });
+        setBackupList(list);
+        setLoadingBackups(false);
+      }).catch(function(e) {
+        alert("バックアップ一覧取得エラー: " + e.message);
+        setLoadingBackups(false);
+      });
+  };
+
+  const restoreBackup = (backupId) => {
+    if (!confirm("バックアップ「" + backupId + "」からデータを復元しますか？\n現在のデータは上書きされます。")) return;
+    firebaseDB.collection("backups").doc(backupId).get().then(function(doc) {
+      if (!doc.exists) { alert("バックアップが見つかりません"); return; }
+      var backupData = doc.data().data;
+      localStorage.setItem("hokuyo_clinic_data", backupData);
+      alert("復元完了！ページを再読み込みします。");
+      window.location.reload();
+    }).catch(function(e) { alert("復元エラー: " + e.message); });
   };
 
   // Export year-based data
@@ -15934,6 +16107,10 @@ function App() {
     onExportData: exportData,
     onImportData: importData,
     onExportYearData: exportYearData,
+    onLoadBackups: loadBackupList,
+    onRestoreBackup: restoreBackup,
+    backupList: backupList,
+    loadingBackups: loadingBackups,
     syncIndicator: (function() {
       if (!FIREBASE_ENABLED) return null;
       var statusMap = {
