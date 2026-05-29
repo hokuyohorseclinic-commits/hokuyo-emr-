@@ -206,10 +206,12 @@ function _autoBackupToFirebase() {
       return;
     }
 
-    var backupDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+    var _now = new Date();
+    _now.setMinutes(_now.getMinutes() + _now.getTimezoneOffset() + 540); // JST
+    var backupDate = _now.getFullYear() + "-" + String(_now.getMonth()+1).padStart(2,"0") + "-" + String(_now.getDate()).padStart(2,"0");
     var backupId = "backup_" + backupDate;
 
-    // バックアップは最大7個保持（1週間分）
+    // 日次バックアップを保存（永久保持）
     firebaseDB.collection("backups").doc(backupId).set({
       data: clinicData,
       casesCount: casesCount,
@@ -218,8 +220,7 @@ function _autoBackupToFirebase() {
     }).then(function() {
       localStorage.setItem("hokuyo_last_backup", String(now));
       _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件)");
-      console.log("[Backup] 自動バックアップ成功: " + backupId);
-      // バックアップは永久保持（自動削除なし）
+      console.log("[Backup] バックアップ成功（永久保持）: " + backupId);
     }).catch(function(err) {
       console.error("[Backup] バックアップエラー:", err);
     });
