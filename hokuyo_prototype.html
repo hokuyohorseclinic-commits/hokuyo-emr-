@@ -343,6 +343,7 @@ var _skipNextWrite = {}; // リモート受信後のuseEffect書き戻し防止�
 
 function firestoreWrite(docName, data) {
   if (!FIREBASE_ENABLED || !firebaseDB) return;
+  try { if (!firebase.auth().currentUser) return; } catch(e) {}
   // リモート更新によるsetState → useEffect発火の場合はスキップ（ピンポン防止）
   if (_skipNextWrite[docName]) {
     _addDebug("書き戻しスキップ: " + docName);
