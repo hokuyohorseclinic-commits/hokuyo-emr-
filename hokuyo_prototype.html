@@ -8662,7 +8662,7 @@ function BreedingListPage({
       borderRadius: 6,
       fontSize: 13
     }
-  }, "2026\u5E74\u30B7\u30FC\u30BA\u30F3 \uFF5C ", /*#__PURE__*/React.createElement("strong", null, breedingCases.length), "\u982D ", filtered.length !== breedingCases.length && `(表示: ${filtered.length})`), /*#__PURE__*/React.createElement("button", {
+  }, "2026\u5E74\u30B7\u30FC\u30BA\u30F3 \uFF5C ", /*#__PURE__*/React.createElement("strong", null, breedingCases.length), "\u982D ", filtered.length !== breedingCases.length && /*#__PURE__*/React.createElement("span", {style:{color:"#1d4ed8",fontWeight:700}}, `（表示 ${filtered.length}頭）`)), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary",
     onClick: () => onNav("breeding_input")
   }, "\uFF0B \u65B0\u898F\u7E41\u6B96\u30AB\u30EB\u30C6"),
@@ -8867,6 +8867,30 @@ function BreedingListPage({
       cursor: "pointer"
     }
   }, "\xD7 \u30D5\u30A3\u30EB\u30BF\u89E3\u9664")),
+  // ── 絞り込み時の頭数サマリー（牧場・獣医師・状態で絞ったときの頭数を頭出し）──
+  (filterFarm || filterStatus || filterBStatus || filter15Day || filterVet) && (() => {
+    const sit = {}; const st = {};
+    filtered.forEach(e => {
+      const si = e.situation || "";
+      if (si) sit[si] = (sit[si] || 0) + 1;
+      const bs = e.c.breedingStatus || "未設定";
+      st[bs] = (st[bs] || 0) + 1;
+    });
+    const label = [filterFarm, filterVet && (filterVet + "先生"), filterStatus, filterBStatus, filter15Day && "鑑定時期"].filter(Boolean).join(" ／ ") || "絞り込み";
+    const chip = (text, bg, c) => React.createElement("span", { key: text, style: { background: bg, color: c, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" } }, text);
+    const sitCols = { "子付き": ["#fed7aa", "#9a3412"], "空胎": ["#dbeafe", "#1e40af"], "上がり": ["#d1fae5", "#065f46"] };
+    const stCols = { "種付中": ["#fce7f3", "#9d174d"], "受胎": ["#dcfce7", "#166534"], "不受胎": ["#fee2e2", "#991b1b"], "継続中": ["#e0e7ff", "#3730a3"], "配合しない": ["#f3f4f6", "#6b7280"], "未設定": ["#f3f4f6", "#6b7280"] };
+    return React.createElement("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, padding: "10px 16px", marginBottom: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10 } },
+      React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "#1e3a8a" } }, label),
+      React.createElement("span", { style: { fontSize: 26, fontWeight: 800, color: "#1d4ed8", lineHeight: 1 } }, filtered.length, React.createElement("span", { style: { fontSize: 13, fontWeight: 600, marginLeft: 2 } }, "頭")),
+      React.createElement("span", { style: { fontSize: 11, color: "#6b7280" } }, "／ 全 " + breedingCases.length + "頭"),
+      React.createElement("span", { style: { width: 1, height: 22, background: "#bfdbfe" } }),
+      ["子付き", "空胎", "上がり"].filter(k => sit[k]).map(k => chip(k + " " + sit[k], sitCols[k][0], sitCols[k][1])),
+      Object.keys(sit).some(k => !sitCols[k]) && chip("その他 " + Object.keys(sit).filter(k => !sitCols[k]).reduce((a, k) => a + sit[k], 0), "#f3f4f6", "#6b7280"),
+      React.createElement("span", { style: { width: 1, height: 22, background: "#bfdbfe" } }),
+      ["種付中", "受胎", "不受胎", "継続中", "配合しない", "未設定"].filter(k => st[k]).map(k => chip(k + " " + st[k], (stCols[k] || ["#f3f4f6", "#6b7280"])[0], (stCols[k] || ["#f3f4f6", "#6b7280"])[1])),
+      Object.keys(st).filter(k => !stCols[k]).map(k => chip(k + " " + st[k], "#f3f4f6", "#6b7280")));
+  })(),
   // ── 一括操作バー ──
   selectedIds.length > 0 && /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,alignItems:"center",padding:"10px 14px",background:"#eff6ff",borderRadius:10,marginBottom:10,flexWrap:"wrap"}},
     /*#__PURE__*/React.createElement("strong", {style:{fontSize:13,color:"#1e40af"}}, selectedIds.length + "頭選択中"),
