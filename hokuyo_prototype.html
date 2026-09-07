@@ -115,7 +115,7 @@ var _firebaseDataCounts = {}; // Firebase側のデータ件数記録（上書き
 var _lastBackupTime = 0; // 最終バックアップ時刻
 var _lastReceiveInfo = "なし";
 // ─── 同期の可視化・上書き保護（2026-09 改修）───
-var SYNC_DATA_VERSION = "2026-09-05a";
+var SYNC_DATA_VERSION = "2026-09-06a";
 var OVERWRITE_PROTECT_RATIO = 0.1;   // ローカル件数がFirebase件数の10%未満なら書き込みを保留（旧: 50%）
 var _blockedWrites = {};   // 上書き保護で保留中の書き込み {docName: {data, localCount, remoteCount, reason, time}}
 var _failedWrites = {};    // 送信エラーになった書き込み {docName: {data, error, time}}
@@ -14651,8 +14651,79 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
   );
 }
 
+// ═══════════════ データ整合性（馬が見つからないカルテ・重複馬） ═══════════════
+function IntegritySection({ horses, farms, cases, setHorses, setCases }) {
+  const E = React.createElement;
+  const [horseNames, setHorseNames] = useState({});
+  const [horseSex, setHorseSex] = useState({});
+  const [linkTo, setLinkTo] = useState({});
+  const horseIds = new Set(horses.map(h => h.id));
+  const farmName = id => (farms.find(f => f.id === id) || {}).name || "";
+  // 馬IDが0以外で馬マスタに存在しないカルテをID別にまとめる
+  const orphanGroups = {};
+  cases.forEach(c => {
+    if (!c.horseId || horseIds.has(c.horseId)) return;
+    (orphanGroups[c.horseId] = orphanGroups[c.horseId] || []).push(c);
+  });
+  const orphanIds = Object.keys(orphanGroups).map(Number);
+  // 同名の馬（重複候補）
+  const byName = {};
+  horses.forEach(h => { (byName[h.name] = byName[h.name] || []).push(h); });
+  const dups = Object.keys(byName).filter(n => byName[n].length > 1).map(n => byName[n]);
+  const caseCount = hid => cases.filter(c => c.horseId === hid).length;
+  if (orphanIds.length === 0 && dups.length === 0) {
+    return E("div", { style: { fontSize: 12, color: "#16a34a", background: "#f0fdf4", borderRadius: 8, padding: "8px 12px", marginBottom: 12 } }, "✅ データ整合性: 馬が見つからないカルテ・重複馬はありません");
+  }
+  const sec = (title, body) => E("div", { style: { border: "1px solid #fca5a5", background: "#fff7f7", borderRadius: 8, padding: "10px 12px", marginBottom: 12 } },
+    E("div", { style: { fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 6 } }, title), body);
+  return E("div", null,
+    orphanIds.length > 0 && sec("🐴 馬が見つからないカルテ（馬名・牧場が空欄になるもの）",
+      orphanIds.map(hid => {
+        const cs = orphanGroups[hid];
+        const fid = cs[0].farmId;
+        const farmHorses = horses.filter(h => h.farmId === fid);
+        return E("div", { key: hid, style: { borderTop: "1px solid #fecaca", paddingTop: 8, marginTop: 8, fontSize: 12 } },
+          E("div", { style: { marginBottom: 4 } },
+            E("b", null, "馬ID " + hid), " ／ 登録日時 " + new Date(hid).toLocaleString("ja-JP") + " ／ 牧場: " + (farmName(fid) || "不明") + " ／ カルテ " + cs.length + "件: ",
+            cs.map(c => c.openDate + " " + (c.type || "") + " " + (c.diagnosis || "")).join("、")),
+          E("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 4 } },
+            E("span", { style: { color: "#6b7280" } }, "① 馬を登録し直す（同じIDで復元）:"),
+            E("input", { className: "inp", placeholder: "馬名", style: { width: 160, padding: "4px 8px", fontSize: 12 }, value: horseNames[hid] || "", onChange: e => setHorseNames({ ...horseNames, [hid]: e.target.value }) }),
+            E("select", { className: "inp", style: { width: 70, padding: "4px 6px", fontSize: 12 }, value: horseSex[hid] || "牝", onChange: e => setHorseSex({ ...horseSex, [hid]: e.target.value }) },
+              ["牡", "牝", "セン"].map(s => E("option", { key: s, value: s }, s))),
+            E("button", { className: "btn btn-primary btn-sm", disabled: !(horseNames[hid] || "").trim(), onClick: () => {
+              const name = (horseNames[hid] || "").trim();
+              if (!confirm("「" + name + "」を馬ID " + hid + "（" + farmName(fid) + "）として登録し、カルテ " + cs.length + " 件に紐付けます。よろしいですか？")) return;
+              setHorses(p => [...p, { id: hid, name: name, farmId: fid, breed: "サラブレッド", age: 0, sex: horseSex[hid] || "牝", color: "", sire: "", dam: "", birthDate: "", isKyosai: false, horseBilling: false }]);
+            } }, "登録して紐付け")),
+          E("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
+            E("span", { style: { color: "#6b7280" } }, "② 既存の馬に付け替える:"),
+            E("select", { className: "inp", style: { width: 220, padding: "4px 6px", fontSize: 12 }, value: linkTo[hid] || "", onChange: e => setLinkTo({ ...linkTo, [hid]: e.target.value }) },
+              E("option", { value: "" }, "— 馬を選択（" + (farmName(fid) || "全牧場") + "）—"),
+              (farmHorses.length ? farmHorses : horses).map(h => E("option", { key: h.id, value: h.id }, h.name + (farmHorses.length ? "" : " / " + farmName(h.farmId))))),
+            E("button", { className: "btn btn-secondary btn-sm", disabled: !linkTo[hid], onClick: () => {
+              const target = horses.find(h => h.id === Number(linkTo[hid]));
+              if (!target) return;
+              if (!confirm("カルテ " + cs.length + " 件を「" + target.name + "」に付け替えます。よろしいですか？")) return;
+              setCases(p => p.map(c => c.horseId === hid ? { ...c, horseId: target.id } : c));
+            } }, "付け替え")));
+      })),
+    dups.length > 0 && sec("👯 同名の馬（重複の可能性）",
+      dups.map(group => E("div", { key: group[0].name, style: { fontSize: 12, marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
+        E("b", { style: { width: 140 } }, group[0].name),
+        group.map(h => {
+          const n = caseCount(h.id);
+          return E("span", { key: h.id, style: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", display: "inline-flex", gap: 6, alignItems: "center" } },
+            farmName(h.farmId) + "（カルテ" + n + "件）",
+            n === 0 && E("button", { className: "btn btn-danger btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => {
+              if (!confirm("「" + h.name + "」（" + farmName(h.farmId) + "・カルテ0件）を削除します。よろしいですか？")) return;
+              setHorses(p => p.filter(x => x.id !== h.id));
+            } }, "削除"));
+        })))));
+}
+
 // ═══════════════ 同期パネル（未送信データの可視化・手動書き込み） ═══════════════
-function SyncPanel({ onClose, tick }) {
+function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases }) {
   const E = React.createElement;
   const [, force] = useState(0);
   React.useEffect(() => { const t = setInterval(() => force(x => x + 1), 2000); return () => clearInterval(t); }, []);
@@ -14695,6 +14766,8 @@ function SyncPanel({ onClose, tick }) {
         } }, "⬆️ 全項目を強制送信"),
         E("button", { className: "btn btn-secondary btn-sm", onClick: () => { retryFailedWrites(); force(x => x + 1); }, disabled: failedCount === 0 }, "🔁 失敗分を再送"),
         E("button", { className: "btn btn-secondary btn-sm", onClick: () => { startFirestoreListeners(); force(x => x + 1); } }, "📡 再接続（再購読）")),
+      // データ整合性
+      E(IntegritySection, { horses: horses || [], farms: farms || [], cases: cases || [], setHorses: setHorses, setCases: setCases }),
       // 項目別テーブル
       E("div", { style: { overflowX: "auto", marginBottom: 12 } },
         E("table", { style: { width: "100%", borderCollapse: "collapse" } },
@@ -16525,7 +16598,7 @@ function App() {
     }
   }, FIREBASE_ENABLED && /*#__PURE__*/React.createElement(SyncBanner, { onOpen: () => setShowSyncPanel(true) }),
      /*#__PURE__*/React.createElement("div", { style: { padding: 24 } }, renderPage())),
-  showSyncPanel && /*#__PURE__*/React.createElement(SyncPanel, { onClose: () => setShowSyncPanel(false), tick: syncTick }), showNewHorse && /*#__PURE__*/React.createElement(NewHorseModal, {
+  showSyncPanel && /*#__PURE__*/React.createElement(SyncPanel, { onClose: () => setShowSyncPanel(false), tick: syncTick, horses: horses, farms: farms, cases: cases, setHorses: setHorses, setCases: setCases }), showNewHorse && /*#__PURE__*/React.createElement(NewHorseModal, {
     farms: farms,
     onSave: h => {
       setHorses(p => [...p, h]);
