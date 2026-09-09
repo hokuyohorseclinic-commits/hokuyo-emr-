@@ -88,6 +88,23 @@ select.inp{font-size:17px;min-height:44px}
 <div id="root" style="display:none"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- Firebase SDK (compat mode for non-build-tool usage) -->
+<script>/* lz-string 1.5.0 (MIT) — localStorage 圧縮用 */
+var LZString=function(){var r=String.fromCharCode,o="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",n="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-$",e={};function t(r,o){if(!e[r]){e[r]={};for(var n=0;n<r.length;n++)e[r][r.charAt(n)]=n}return e[r][o]}var i={compressToBase64:function(r){if(null==r)return"";var n=i._compress(r,6,function(r){return o.charAt(r)});switch(n.length%4){default:case 0:return n;case 1:return n+"===";case 2:return n+"==";case 3:return n+"="}},decompressFromBase64:function(r){return null==r?"":""==r?null:i._decompress(r.length,32,function(n){return t(o,r.charAt(n))})},compressToUTF16:function(o){return null==o?"":i._compress(o,15,function(o){return r(o+32)})+" "},decompressFromUTF16:function(r){return null==r?"":""==r?null:i._decompress(r.length,16384,function(o){return r.charCodeAt(o)-32})},compressToUint8Array:function(r){for(var o=i.compress(r),n=new Uint8Array(2*o.length),e=0,t=o.length;e<t;e++){var s=o.charCodeAt(e);n[2*e]=s>>>8,n[2*e+1]=s%256}return n},decompressFromUint8Array:function(o){if(null==o)return i.decompress(o);for(var n=new Array(o.length/2),e=0,t=n.length;e<t;e++)n[e]=256*o[2*e]+o[2*e+1];var s=[];return n.forEach(function(o){s.push(r(o))}),i.decompress(s.join(""))},compressToEncodedURIComponent:function(r){return null==r?"":i._compress(r,6,function(r){return n.charAt(r)})},decompressFromEncodedURIComponent:function(r){return null==r?"":""==r?null:(r=r.replace(/ /g,"+"),i._decompress(r.length,32,function(o){return t(n,r.charAt(o))}))},compress:function(o){return i._compress(o,16,function(o){return r(o)})},_compress:function(r,o,n){if(null==r)return"";var e,t,i,s={},u={},a="",p="",c="",l=2,f=3,h=2,d=[],m=0,v=0;for(i=0;i<r.length;i+=1)if(a=r.charAt(i),Object.prototype.hasOwnProperty.call(s,a)||(s[a]=f++,u[a]=!0),p=c+a,Object.prototype.hasOwnProperty.call(s,p))c=p;else{if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++),s[p]=f++,c=String(a)}if(""!==c){if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++)}for(t=2,e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;for(;;){if(m<<=1,v==o-1){d.push(n(m));break}v++}return d.join("")},decompress:function(r){return null==r?"":""==r?null:i._decompress(r.length,32768,function(o){return r.charCodeAt(o)})},_decompress:function(o,n,e){var t,i,s,u,a,p,c,l=[],f=4,h=4,d=3,m="",v=[],g={val:e(0),position:n,index:1};for(t=0;t<3;t+=1)l[t]=t;for(s=0,a=Math.pow(2,2),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 2:return""}for(l[3]=c,i=c,v.push(c);;){if(g.index>o)return"";for(s=0,a=Math.pow(2,d),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(c=s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 2:return v.join("")}if(0==f&&(f=Math.pow(2,d),d++),l[c])m=l[c];else{if(c!==h)return null;m=i+i.charAt(0)}v.push(m),l[h++]=i+m.charAt(0),i=m,0==--f&&(f=Math.pow(2,d),d++)}}};return i}();"function"==typeof define&&define.amd?define(function(){return LZString}):"undefined"!=typeof module&&null!=module?module.exports=LZString:"undefined"!=typeof angular&&null!=angular&&angular.module("LZString",[]).factory("LZString",function(){return LZString});
+</script>
+<script>
+// ─── localStorage 圧縮保存（Safari の 5MB 制限対策）───
+// 保存形式: LZString.compressToUTF16(JSON)。旧形式（生JSON、先頭が "{"）もそのまま読める
+var LS_DATA_KEY = "hokuyo_clinic_data";
+function lsGetData() {
+  var raw = localStorage.getItem(LS_DATA_KEY);
+  if (!raw) return null;
+  if (raw.charAt(0) === "{") return raw;
+  try { var s = LZString.decompressFromUTF16(raw); return s || null; } catch (e) { console.error("[LS] 展開失敗", e); return null; }
+}
+function lsSetData(jsonStr) {
+  localStorage.setItem(LS_DATA_KEY, LZString.compressToUTF16(jsonStr));
+}
+</script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
@@ -273,7 +290,7 @@ function _autoBackupToFirebase() {
   var lastBackup = parseInt(localStorage.getItem("hokuyo_last_backup") || "0");
   if (now - lastBackup < ONE_DAY) return;
 
-  var clinicData = localStorage.getItem("hokuyo_clinic_data");
+  var clinicData = lsGetData();
   if (!clinicData) return;
 
   try {
@@ -291,8 +308,10 @@ function _autoBackupToFirebase() {
     var backupId = "backup_" + backupDate;
 
     // 日次バックアップを保存（永久保持）
+    var backupPayload = clinicData.length > 700000 ? LZString.compressToBase64(clinicData) : clinicData;
     firebaseDB.collection("backups").doc(backupId).set({
-      data: clinicData,
+      data: backupPayload,
+      compressed: backupPayload === clinicData ? "" : "lz64",
       casesCount: casesCount,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       deviceId: _deviceId
@@ -507,7 +526,7 @@ function allowWritesNow(seconds) {
 }
 // ローカル(localStorage)の全データをFirebaseへ強制送信
 function forceWriteAll() {
-  var raw = localStorage.getItem("hokuyo_clinic_data");
+  var raw = lsGetData();
   if (!raw) { alert("ローカルデータがありません"); return; }
   var parsed;
   try { parsed = JSON.parse(raw); } catch(e) { alert("ローカルデータの読み取りに失敗しました"); return; }
@@ -537,7 +556,7 @@ function retryFailedWrites() {
 // 同期パネル表示用のレポート
 function getSyncReport() {
   var local = {};
-  try { local = JSON.parse(localStorage.getItem("hokuyo_clinic_data") || "{}"); } catch(e) {}
+  try { local = JSON.parse(lsGetData() || "{}"); } catch(e) {}
   var rows = SYNC_FIELDS.map(function(k) {
     return {
       doc: k,
@@ -6660,6 +6679,7 @@ function Sidebar({
   onResetData,
   onExportData,
   onImportData,
+  onImportFm,
   onExportYearData,
   onLoadBackups,
   onRestoreBackup,
@@ -6896,6 +6916,20 @@ function Sidebar({
       width: "100%"
     }
   }, "\u{1F4C2} \u30C7\u30FC\u30BF\u8AAD\u8FBC"), /*#__PURE__*/React.createElement("button", {
+    onClick: onImportFm,
+    title: "FileMaker\u304B\u3089\u5909\u63DB\u3057\u305FJSON\uFF08hokuyo-fm-import\uFF09\u3092\u30DE\u30FC\u30B8\u53D6\u8FBC",
+    style: {
+      padding: "6px 8px",
+      borderRadius: 4,
+      border: "1px solid #d97706",
+      background: "#d97706",
+      color: "#fef3c7",
+      fontSize: 11,
+      fontWeight: 500,
+      cursor: "pointer",
+      width: "100%"
+    }
+  }, "\u{1F5C4}\uFE0F FM\u30AB\u30EB\u30C6\u53D6\u8FBC"), /*#__PURE__*/React.createElement("button", {
     onClick: onResetData,
     style: {
       padding: "6px 8px",
@@ -8355,7 +8389,11 @@ function BreedingListPage({
   const [showCarryoverDialog, setShowCarryoverDialog] = useState(false);
   const toggleSelect = (id, e) => { e.stopPropagation(); setSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); };
   const toggleAll = (ids) => { setSelectedIds(prev => prev.length === ids.length ? [] : ids); };
-  const breedingCases = cases.filter(c => c.type === "繁殖" && !c.archived);
+  // シーズン（年）で絞り込み：season フィールドが無い旧カルテは openDate の年
+  const seasonOf = (c) => Number(c.season) || Number((c.openDate || "").slice(0, 4)) || new Date().getFullYear();
+  const allSeasons = Array.from(new Set(cases.filter(c => c.type === "繁殖" && !c.archived).map(seasonOf))).sort((a, b) => b - a);
+  const [bSeason, setBSeason] = useState(new Date().getFullYear());
+  const breedingCases = cases.filter(c => c.type === "繁殖" && !c.archived && seasonOf(c) === bSeason);
   const statusColors = {
     継続中: "blue",
     種付中: "pink",
@@ -8674,7 +8712,11 @@ function BreedingListPage({
       borderRadius: 6,
       fontSize: 13
     }
-  }, "2026\u5E74\u30B7\u30FC\u30BA\u30F3 \uFF5C ", /*#__PURE__*/React.createElement("strong", null, breedingCases.length), "\u982D ", filtered.length !== breedingCases.length && /*#__PURE__*/React.createElement("span", {style:{color:"#1d4ed8",fontWeight:700}}, `（表示 ${filtered.length}頭）`)), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("select", {
+    value: bSeason,
+    onChange: e => setBSeason(Number(e.target.value)),
+    style: { fontSize: 13, border: "1px solid #d1d5db", borderRadius: 4, padding: "1px 4px", marginRight: 4, background: "#fff" }
+  }, (allSeasons.includes(bSeason) ? allSeasons : [bSeason].concat(allSeasons)).map(y => /*#__PURE__*/React.createElement("option", { key: y, value: y }, y + "\u5E74\u30B7\u30FC\u30BA\u30F3"))), "\uFF5C ", /*#__PURE__*/React.createElement("strong", null, breedingCases.length), "\u982D ", filtered.length !== breedingCases.length && /*#__PURE__*/React.createElement("span", {style:{color:"#1d4ed8",fontWeight:700}}, `（表示 ${filtered.length}頭）`)), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary",
     onClick: () => onNav("breeding_input")
   }, "\uFF0B \u65B0\u898F\u7E41\u6B96\u30AB\u30EB\u30C6"),
@@ -14928,7 +14970,7 @@ function App() {
   // LocalStorage persistence utility
   const loadPersistedData = () => {
     try {
-      const stored = localStorage.getItem("hokuyo_clinic_data");
+      const stored = lsGetData();
       if (stored) {
         const data = JSON.parse(stored);
         return data;
@@ -15080,7 +15122,7 @@ function App() {
       purchaseHistory, insuranceList
     };
     try {
-      localStorage.setItem("hokuyo_clinic_data", JSON.stringify(dataToStore));
+      lsSetData(JSON.stringify(dataToStore));
       localStorage.setItem("hokuyo_clinic_last_save", new Date().toISOString());
     } catch (e) {
       console.error("Failed to persist data:", e);
@@ -15149,7 +15191,9 @@ function App() {
     firebaseDB.collection("backups").doc(backupId).get().then(function(doc) {
       if (!doc.exists) { alert("バックアップが見つかりません"); return; }
       var backupData = doc.data().data;
-      localStorage.setItem("hokuyo_clinic_data", backupData);
+      if (doc.data().compressed === "lz64") backupData = LZString.decompressFromBase64(backupData);
+      if (!backupData || backupData.charAt(0) !== "{") { alert("バックアップデータの展開に失敗しました"); return; }
+      lsSetData(backupData);
       alert("復元完了！ページを再読み込みします。");
       window.location.reload();
     }).catch(function(e) { alert("復元エラー: " + e.message); });
@@ -15245,6 +15289,77 @@ function App() {
     alert("データをエクスポートしました");
   };
 
+
+  // ═══ FileMaker カルテ取込（hokuyo-fm-import JSON のマージ取込） ═══
+  // ・JSON の dateFrom〜dateTo（openDate 基準）にある既存カルテは FM 側で置換（削除→追加）
+  // ・以前 FM 取込したカルテ（source==="FM"）は全て入れ替え（再取込しても重複しない）
+  // ・置換で消える繁殖カルテに dateTo より後の経過記録があれば、新しい FM カルテ（同じ馬・同じシーズン）へ引き継ぐ
+  // ・ID は 900000000 + FMカルテno（既存IDと衝突しない範囲）
+  const importFmData = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target.result);
+          if (data.format !== "hokuyo-fm-import" || !Array.isArray(data.cases)) {
+            alert("FM取込用のファイルではありません（format: hokuyo-fm-import が必要）"); return;
+          }
+          const from = data.dateFrom || "0000-00-00", to = data.dateTo || "9999-99-99";
+          const inRange = (c) => c.openDate >= from && c.openDate <= to;
+          const removed = cases.filter(c => c.source === "FM" || inRange(c));
+          const kept = cases.filter(c => !(c.source === "FM" || inRange(c)));
+          // 引き継ぎ用：消える繁殖カルテの dateTo 以降の経過記録
+          const carry = {};
+          removed.filter(c => c.type === "繁殖" && c.source !== "FM").forEach(c => {
+            const late = (c.findings || []).filter(f => f.date && f.date > to);
+            if (late.length) {
+              const key = c.horseId + "_" + (c.season || (c.openDate || "").slice(0, 4));
+              carry[key] = (carry[key] || []).concat(late);
+            }
+          });
+          const usedIds = new Set(kept.map(c => c.id));
+          let carried = 0;
+          const newCases = data.cases.map((c, i) => {
+            let id = 900000000 + (Number(c.fmNo) || i);
+            while (usedIds.has(id)) id += 1000000;
+            usedIds.add(id);
+            const nc = Object.assign({}, c, { id, source: "FM", importedAt: todayJST() });
+            if (nc.type === "繁殖") {
+              const key = nc.horseId + "_" + nc.season;
+              if (carry[key]) { nc.findings = carry[key].concat(nc.findings || []); carried += carry[key].length; delete carry[key]; }
+            }
+            return nc;
+          });
+          const horseIds = new Set(horses.map(h => h.id));
+          const newHorses = (data.horses || []).filter(h => !horseIds.has(h.id));
+          const farmIds = new Set(farms.map(f => f.id));
+          const newFarms = (data.farms || []).filter(f => !farmIds.has(f.id));
+          const cnt = (arr) => ["一般", "繁殖", "薬事"].map(t => t + " " + arr.filter(c => c.type === t).length).join(" / ");
+          const msg = "FileMaker カルテを取り込みます。\n\n" +
+            "期間: " + from + " 〜 " + to + "\n" +
+            "追加: " + newCases.length + "件（" + cnt(newCases) + "）\n" +
+            "置換で削除: " + removed.length + "件（" + cnt(removed) + "）\n" +
+            (carried ? "　うち " + to + " 以降の繁殖経過記録 " + carried + " 行は新カルテへ引き継ぎ\n" : "") +
+            "馬マスタ追加: " + newHorses.length + "頭 / 牧場追加: " + newFarms.length + "件\n\n" +
+            "取り込み前に「データ保存」でバックアップを取ることをお勧めします。実行しますか？";
+          if (!confirm(msg)) return;
+          if (newFarms.length) setFarms(prev => prev.concat(newFarms.map(f => Object.assign({}, f))));
+          if (newHorses.length) setHorses(prev => prev.concat(newHorses.map(h => Object.assign({}, h))));
+          setCases(kept.concat(newCases));
+          alert("取込完了: " + newCases.length + "件を追加、" + removed.length + "件を置換しました。\n他の端末への同期には少し時間がかかります。");
+        } catch (err) {
+          alert("FM取込に失敗しました: " + err.message);
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
   // Import data from JSON file
   const importData = () => {
     const input = document.createElement("input");
@@ -15261,7 +15376,7 @@ function App() {
             alert("無効なバックアップファイルです"); return;
           }
           if (!confirm("現在のデータを上書きしてインポートしますか？\n(" + (data.cases?.length || 0) + "件のカルテ、" + (data.exportDate ? data.exportDate.split("T")[0] + "のバックアップ" : "日付不明") + ")")) return;
-          localStorage.setItem("hokuyo_clinic_data", JSON.stringify(data));
+          lsSetData(JSON.stringify(data));
           window.location.reload();
         } catch (err) {
           alert("ファイルの読み込みに失敗しました: " + err.message);
@@ -16665,6 +16780,7 @@ function App() {
     onResetData: resetAllData,
     onExportData: exportData,
     onImportData: importData,
+    onImportFm: importFmData,
     onExportYearData: exportYearData,
     onLoadBackups: loadBackupList,
     onRestoreBackup: restoreBackup,
