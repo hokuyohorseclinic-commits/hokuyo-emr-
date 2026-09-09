@@ -10093,7 +10093,7 @@ function BillingPage({
   const [billingCycleFilter, setBillingCycleFilter] = useState("");
   const [selectedFarm, setSelectedFarm] = useState(null);
   const [searchFarm, setSearchFarm] = useState("");
-  const [billingTab, setBillingTab] = useState("actual"); // actual, invoice, ledger, payment
+  const [billingTab, setBillingTab] = useState("invoice"); // actual, invoice, ledger, payment
   const [showPayForm, setShowPayForm] = useState(null); // farmId for payment form
   const [payDate, setPayDate] = useState(todayJST());
   const [payAmount, setPayAmount] = useState("");
@@ -11349,9 +11349,6 @@ function BillingPage({
       width: "fit-content"
     }
   }, [{
-    id: "actual",
-    l: "Excel実績"
-  }, {
     id: "invoice",
     l: "請求一覧"
   }, {
@@ -11360,6 +11357,9 @@ function BillingPage({
   }, {
     id: "payment",
     l: "入金管理"
+  }, {
+    id: "actual",
+    l: "FM請求実績（突合用）"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.id,
     onClick: () => setBillingTab(t.id),
