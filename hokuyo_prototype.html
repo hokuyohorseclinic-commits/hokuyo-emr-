@@ -4196,6 +4196,7 @@ function todayJST(){var d=new Date();d.setMinutes(d.getMinutes()+d.getTimezoneOf
 
 function calcBreedingVisitTotal(finding, bm) {
 if (!finding) return 0;
+if (finding.totalFee != null && finding.totalFee !== "") return Number(finding.totalFee) || 0;
 var t = 0;
 var procs = finding.procedures || [];
 for (var i = 0; i < procs.length; i++) {
@@ -15310,48 +15311,72 @@ function App() {
             alert("FM取込用のファイルではありません（format: hokuyo-fm-import が必要）"); return;
           }
           const from = data.dateFrom || "0000-00-00", to = data.dateTo || "9999-99-99";
-          const inRange = (c) => c.openDate >= from && c.openDate <= to;
-          const removed = cases.filter(c => c.source === "FM" || inRange(c));
-          const kept = cases.filter(c => !(c.source === "FM" || inRange(c)));
-          // 引き継ぎ用：消える繁殖カルテの dateTo 以降の経過記録
-          const carry = {};
-          removed.filter(c => c.type === "繁殖" && c.source !== "FM").forEach(c => {
-            const late = (c.findings || []).filter(f => f.date && f.date > to);
-            if (late.length) {
-              const key = c.horseId + "_" + (c.season || (c.openDate || "").slice(0, 4));
-              carry[key] = (carry[key] || []).concat(late);
-            }
-          });
+          const inRange = (d) => d && d >= from && d <= to;
+          // ── 置換対象：JSON の期間（dateFrom〜dateTo）に openDate が入る既存カルテ（FM由来・手入力とも）
+          //    期間外のカルテはそのまま残す（月次の差分取込ができる）
+          const removed = cases.filter(c => inRange(c.openDate) && c.type !== "繁殖");
+          const kept = cases.filter(c => !(inRange(c.openDate) && c.type !== "繁殖"));
+          // ── 繁殖：同じ馬・同じシーズンの既存カルテがあれば、期間内の経過記録だけ入れ替えて残りは引き継ぐ
+          const bKey = (c) => c.horseId + "_" + (c.season || (c.openDate || "").slice(0, 4));
+          const existingB = {};
+          kept.forEach(c => { if (c.type === "繁殖") existingB[bKey(c)] = c; });
           const usedIds = new Set(kept.map(c => c.id));
-          let carried = 0;
-          const newCases = data.cases.map((c, i) => {
-            let id = 900000000 + (Number(c.fmNo) || i);
-            while (usedIds.has(id)) id += 1000000;
-            usedIds.add(id);
-            const nc = Object.assign({}, c, { id, source: "FM", importedAt: todayJST() });
+          let mergedB = 0, replacedB = 0, carried = 0;
+          const newCases = [];
+          data.cases.forEach((c, i) => {
+            const nc = Object.assign({}, c, { source: "FM", importedAt: todayJST() });
             if (nc.type === "繁殖") {
-              const key = nc.horseId + "_" + nc.season;
-              if (carry[key]) { nc.findings = carry[key].concat(nc.findings || []); carried += carry[key].length; delete carry[key]; }
+              const ex = existingB[bKey(nc)];
+              if (ex) {
+                // 既存カルテを更新（IDは維持）：期間外の経過記録を引き継ぐ
+                const keepF = (ex.findings || []).filter(f => !inRange(f.date));
+                carried += keepF.length;
+                nc.id = ex.id;
+                nc.findings = keepF.concat(nc.findings || []).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+                nc.openDate = ex.openDate < nc.openDate ? ex.openDate : nc.openDate;
+                ["breedingSituation", "stallion", "foalingDate", "breedingNote"].forEach(k => { if (!nc[k] && ex[k]) nc[k] = ex[k]; });
+                const idx = kept.indexOf(ex); kept.splice(idx, 1); usedIds.delete(ex.id);
+                if (ex.source === "FM") replacedB++; else mergedB++;
+              }
             }
-            return nc;
+            if (nc.id == null || usedIds.has(nc.id)) {
+              let id = 900000000 + (Number(c.fmNo) || i);
+              while (usedIds.has(id)) id += 1000000;
+              nc.id = id;
+            }
+            usedIds.add(nc.id);
+            newCases.push(nc);
           });
+          // ── 期間内に完全に収まる既存繁殖カルテで、JSON側に同じ馬・シーズンが無いものは置換扱いで削除
+          let removedB = 0;
+          for (let i = kept.length - 1; i >= 0; i--) {
+            const c = kept[i];
+            if (c.type === "繁殖" && inRange(c.openDate) && (c.findings || []).every(f => inRange(f.date))) { kept.splice(i, 1); removed.push(c); removedB++; }
+          }
           const horseIds = new Set(horses.map(h => h.id));
           const newHorses = (data.horses || []).filter(h => !horseIds.has(h.id));
           const farmIds = new Set(farms.map(f => f.id));
           const newFarms = (data.farms || []).filter(f => !farmIds.has(f.id));
+          const drugIds = new Set(drugsMaster.map(d => d.id));
+          const newDrugs = (data.drugsMaster || []).filter(d => !drugIds.has(d.id));
+          const btNow = breedingTreatments || [];
+          const btAdd = (data.breedingTreatments || []).filter(b => !btNow.some(x => x.id === b.id || x.name === b.name));
+          const btFix = (data.breedingTreatments || []).filter(b => btNow.some(x => (x.id === b.id || x.name === b.name) && !(Number(x.fee) > 0)) && Number(b.fee) > 0);
           const cnt = (arr) => ["一般", "繁殖", "薬事"].map(t => t + " " + arr.filter(c => c.type === t).length).join(" / ");
           const msg = "FileMaker カルテを取り込みます。\n\n" +
             "期間: " + from + " 〜 " + to + "\n" +
-            "追加: " + newCases.length + "件（" + cnt(newCases) + "）\n" +
-            "置換で削除: " + removed.length + "件（" + cnt(removed) + "）\n" +
-            (carried ? "　うち " + to + " 以降の繁殖経過記録 " + carried + " 行は新カルテへ引き継ぎ\n" : "") +
-            "馬マスタ追加: " + newHorses.length + "頭 / 牧場追加: " + newFarms.length + "件\n\n" +
+            "追加/更新: " + newCases.length + "件（" + cnt(newCases) + "）\n" +
+            "置換で削除（期間内）: " + removed.length + "件（" + cnt(removed) + "）\n" +
+            "繁殖: 既存カルテ更新 " + (replacedB + mergedB) + "頭（期間外の経過記録 " + carried + " 行は引き継ぎ）\n" +
+            "馬マスタ追加: " + newHorses.length + "頭 / 牧場追加: " + newFarms.length + "件 / 薬品追加: " + newDrugs.length + "件 / 繁殖料金追加: " + btAdd.length + "件（料金補正 " + btFix.length + "件）\n\n" +
             "取り込み前に「データ保存」でバックアップを取ることをお勧めします。実行しますか？";
           if (!confirm(msg)) return;
           if (newFarms.length) setFarms(prev => prev.concat(newFarms.map(f => Object.assign({}, f))));
           if (newHorses.length) setHorses(prev => prev.concat(newHorses.map(h => Object.assign({}, h))));
+          if (newDrugs.length) setDrugsMaster(prev => prev.concat(newDrugs.map(d => Object.assign({}, d))));
+          if (btAdd.length || btFix.length) setBreedingTreatments(prev => prev.map(x => { const f = btFix.find(b => b.id === x.id || b.name === x.name); return f ? Object.assign({}, x, { fee: f.fee }) : x; }).concat(btAdd.map(b => Object.assign({}, b))));
           setCases(kept.concat(newCases));
-          alert("取込完了: " + newCases.length + "件を追加、" + removed.length + "件を置換しました。\n他の端末への同期には少し時間がかかります。");
+          alert("取込完了: " + newCases.length + "件を追加/更新、" + removed.length + "件を置換しました。\n他の端末への同期には少し時間がかかります。");
         } catch (err) {
           alert("FM取込に失敗しました: " + err.message);
         }
