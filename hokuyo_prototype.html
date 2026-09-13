@@ -15457,6 +15457,7 @@ function App() {
     let yearsImported = new Set();
     let merged = JSON.parse(JSON.stringify(billingActual));
     let filesProcessed = 0;
+    let importedPays = [];
     files.forEach(file => {
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -15469,7 +15470,7 @@ function App() {
           const hdr = rows[0].map(h => String(h || "").trim());
           var colYear = -1, colMonth = -1, colFarmId = -1, colMonthly = -1;
           var colCarryIn = -1, colInvoice = -1, colNextCarry = -1, colAr = -1, colAdj = -1;
-          var colFarmName = -1;
+          var colFarmName = -1, colPay1 = -1, colPayD1 = -1, colPay2 = -1, colPayD2 = -1;
           hdr.forEach((h, i) => {
             if (h === "年") colYear = i;
             if (h === "月") colMonth = i;
@@ -15477,6 +15478,10 @@ function App() {
             if (h === "動物牧場マスター::管理者名") colFarmName = i;
             if (h === "sum_今月診療代合計消費税") colMonthly = i;
             if (h === "来月繰越額") colNextCarry = i;
+            if (h === "DB_年月::今回ご入金額1" && colPay1 < 0) colPay1 = i;
+            if (h === "DB_年月::入金日1" && colPayD1 < 0) colPayD1 = i;
+            if (h === "DB_年月::今回ご入金額2" && colPay2 < 0) colPay2 = i;
+            if (h === "DB_年月::入金日2" && colPayD2 < 0) colPayD2 = i;
           });
           var carryInCount = 0, invoiceCount = 0, adjCount = 0;
           hdr.forEach((h, i) => {
@@ -15519,6 +15524,19 @@ function App() {
                 });
               }
             }
+            // ── 実入金（FMの入金額1/2・入金日1/2）を入金管理へ ──
+            var toDate = function(v) {
+              if (v == null || v === "") return "";
+              if (v instanceof Date) return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0");
+              if (typeof v === "number") { var dd = new Date(Math.round((v - 25569) * 86400000)); return dd.getUTCFullYear() + "-" + String(dd.getUTCMonth() + 1).padStart(2, "0") + "-" + String(dd.getUTCDate()).padStart(2, "0"); }
+              var m = String(v).match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/); return m ? m[1] + "-" + m[2].padStart(2, "0") + "-" + m[3].padStart(2, "0") : "";
+            };
+            [[colPay1, colPayD1], [colPay2, colPayD2]].forEach(function(pc) {
+              if (pc[0] < 0) return;
+              var amt = Number(String(r[pc[0]] == null ? "" : r[pc[0]]).replace(/,/g, "")) || 0;
+              var dt = pc[1] >= 0 ? toDate(r[pc[1]]) : "";
+              if (amt > 0 && dt) importedPays.push({ farmId: fid, date: dt, amount: amt, method: "振込", memo: "FM請求書より（" + yr + "年" + mo + "月）" });
+            });
             fileCount++;
             yearsImported.add(yr);
           }
@@ -15529,8 +15547,26 @@ function App() {
         filesProcessed++;
         if (filesProcessed === files.length) {
           setBillingActual(merged);
+          // 入金：同じ牧場・同じ月の自動登録分（FM実績より自動登録）は実入金で置き換え、既存の同一入金（牧場・日付・金額）は重複させない
+          var addedPays = 0, removedAuto = 0;
+          if (importedPays.length) {
+            setPayments(function(prev) {
+              var next = prev.slice();
+              importedPays.forEach(function(ip) {
+                var ym = ip.date.slice(0, 7);
+                var before = next.length;
+                next = next.filter(function(p) { return !(p.farmId === ip.farmId && (p.memo || "").indexOf("FM実績より自動登録") === 0 && (p.date || "").slice(0, 7) === ym); });
+                removedAuto += before - next.length;
+              });
+              importedPays.forEach(function(ip, i) {
+                if (next.some(function(p) { return p.farmId === ip.farmId && p.date === ip.date && p.amount === ip.amount; })) return;
+                next.push(Object.assign({ id: Date.now() + i }, ip)); addedPays++;
+              });
+              return next;
+            });
+          }
           var yearList = Array.from(yearsImported).sort().join(", ");
-          alert("Excel請求データ取込完了\n\n" + files.length + "ファイル → " + totalImported + "件の月次データ\n対象年度: " + yearList + "\n\nデータは自動保存されます。");
+          alert("Excel請求データ取込完了\n\n" + files.length + "ファイル → " + totalImported + "件の月次データ\n対象年度: " + yearList + "\n入金: " + importedPays.length + "件を読み取り（重複は除外して登録）\n\nデータは自動保存されます。");
         }
       };
       reader.readAsArrayBuffer(file);
