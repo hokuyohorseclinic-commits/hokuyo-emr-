@@ -10297,6 +10297,36 @@ function BillingPage({
   };
   const actualArrow = (key) => actualSortKey === key ? (actualSortDir === "asc" ? " ▲" : " ▼") : "";
 
+  // ── FM請求実績（請求額 − 来月繰越 = その月の入金）から入金を自動登録 ──
+  //    入金日は翌月末（既存の手入力入金と同じ「翌月に入金」の並び）、既に同額以上の入金があれば追加しない
+  const registerPaymentsFromActual = () => {
+    const y = Number(billingYear), m = Number(billingMonth);
+    const baYear = (billingActual || {})[y] || {};
+    const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+    const lastDay = new Date(ny, nm, 0).getDate();
+    const payDate = ny + "-" + String(nm).padStart(2, "0") + "-" + String(lastDay).padStart(2, "0");
+    const nmKey = ny + "-" + String(nm).padStart(2, "0");
+    const adds = [];
+    Object.keys(baYear).forEach(fid => {
+      const fd = baYear[fid][m];
+      if (!fd) return;
+      const paidFM = Math.round((fd.invoice || 0) - (fd.nextCarry || 0));
+      if (paidFM <= 0) return;
+      const existing = (payments || []).filter(p => p.farmId === Number(fid) && ((p.date || "").slice(0, 7) === nmKey || (p.year === y && p.month === m))).reduce((s, p) => s + p.amount, 0);
+      const diff = paidFM - existing;
+      if (diff > 0) {
+        const farm = farms.find(f => f.id === Number(fid));
+        adds.push({ id: Date.now() + adds.length, farmId: Number(fid), date: payDate, amount: diff, method: "振込", memo: "FM実績より自動登録（" + y + "年" + m + "月分）", year: y, month: m, farmName: farm ? farm.name : fid });
+      }
+    });
+    if (!adds.length) { alert(y + "年" + m + "月分：追加登録が必要な入金はありません（すべて登録済みか、実績データがありません）"); return; }
+    const total = adds.reduce((s, a) => s + a.amount, 0);
+    const preview = adds.slice(0, 12).map(a => "・" + a.farmName + " ¥" + a.amount.toLocaleString()).join("\n") + (adds.length > 12 ? "\n…他" + (adds.length - 12) + "件" : "");
+    if (!confirm(y + "年" + m + "月分の請求に対する入金を " + adds.length + "件（合計 ¥" + total.toLocaleString() + "）、入金日 " + payDate + " で登録します。\n\n" + preview + "\n\nよろしいですか？")) return;
+    setPayments(prev => prev.concat(adds.map(a => { const b = Object.assign({}, a); delete b.farmName; return b; })));
+    alert(adds.length + "件の入金を登録しました");
+  };
+
   const {actualRows, actualTotals} = useMemo(() => {
     const y = Number(billingYear);
     const m = Number(billingMonth);
@@ -11470,7 +11500,10 @@ function BillingPage({
       React.createElement("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:excelDragOver?0:8}},
         React.createElement("span", {style:{fontSize:12,color:excelDragOver?"#059669":"#92400e",fontWeight:excelDragOver?700:400}},
           excelDragOver ? "ここにドロップして取込" : "FileMakerからインポートした請求実績データ（" + Object.keys(billingActual || {}).sort().join(", ") + "年）"),
-        React.createElement("button", {onClick:onImportExcel, className:"btn", style:{padding:"4px 12px",fontSize:11,background:"#059669",color:"#fff",borderRadius:6}}, "Excel取込")
+        React.createElement("div", {style:{display:"flex",gap:6}},
+          React.createElement("button", {onClick:registerPaymentsFromActual, className:"btn", style:{padding:"4px 12px",fontSize:11,background:"#2563eb",color:"#fff",borderRadius:6}}, "この月の入金をFM実績から登録"),
+          React.createElement("button", {onClick:onImportExcel, className:"btn", style:{padding:"4px 12px",fontSize:11,background:"#059669",color:"#fff",borderRadius:6}}, "Excel取込")
+        )
       ),
       !excelDragOver && React.createElement("div", {style:{fontSize:11,color:"#b45309",display:"flex",alignItems:"center",gap:6}},
         React.createElement("span", null, "FileMakerのExcelファイルをここにドラッグ＆ドロップ、または「Excel取込」ボタンで選択"))
