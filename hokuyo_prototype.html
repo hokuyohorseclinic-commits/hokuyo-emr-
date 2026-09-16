@@ -10230,12 +10230,13 @@ function BillingPage({
         const nextY = m === 12 ? y + 1 : y, nextM = m === 12 ? 1 : m + 1;
         const nextBa = ((ba[nextY] || {})[farmId] || {})[nextM];
         const nextIsFM = nextBa && (nextBa.monthly || nextBa.invoice || nextBa.carryIn || nextBa.nextCarry);
-        if (baMonth.nextCarry == null) {
+        // 返す値は「その月の今回請求額（税込）」＝翌月に受ける入金を引く前の残高。翌月側で入金を差し引いて繰越額にする（FMと同じ）
+        if (baMonth.invoice) {
           balance = baMonth.invoice || 0;
-        } else if (nextIsFM) {
-          balance = baMonth.nextCarry || 0;
+        } else if (baMonth.nextCarry != null) {
+          balance = (baMonth.nextCarry || 0) + calcFarmMonthPayments(farmId, nextY, nextM);
         } else {
-          balance = (baMonth.nextCarry || 0) + calcFarmMonthPayments(farmId, nextY, nextM);  // 翌月はアプリ計算に移るので、翌月の入金を二重に引かないよう戻す
+          balance = 0;
         }
       } else {
         const farm = farms.find(f => f.id === farmId);
@@ -10283,11 +10284,12 @@ function BillingPage({
       const total = generalTotal + breedingTotal + pharmaTotal;
       const caseCount = generalCases.length + breedingCases.length + pharmaCases.length;
       const monthPayments = calcFarmMonthPayments(farm.id, y, m);
-      const prevCarryover = calcCarryover(farm.id, y, m);
+      const prevInvoice = calcCarryover(farm.id, y, m);        // 前回請求額（税込）
+      const prevCarryover = prevInvoice - monthPayments;         // 繰越額＝前回請求額−今回ご入金額（FMと同じ）
       const adjInfo = getAppAdj(farm.id, y, m);
       const adjustment = adjInfo.amount;               // 税込
       const invoiceTotal = prevCarryover + taxIncl(total) + adjustment;   // 今回ご請求額（税込）＝FileMakerの「今回請求額」
-      const nextCarryover = invoiceTotal - monthPayments;
+      const nextCarryover = invoiceTotal;
       return {
         farm,
         period,
@@ -10304,6 +10306,7 @@ function BillingPage({
         invoiceTotal,
         caseCount,
         monthPayments,
+        prevInvoice,
         prevCarryover,
         nextCarryover
       };
@@ -10322,7 +10325,8 @@ function BillingPage({
   const grandBreeding = filteredBilling.reduce((s, fb) => s + fb.breedingTotal, 0);
   const grandPharma = filteredBilling.reduce((s, fb) => s + fb.pharmaTotal, 0);
   const grandPayments = filteredBilling.reduce((s, fb) => s + fb.monthPayments, 0);
-  const grandPrevCarry = filteredBilling.reduce((s, fb) => s + fb.prevCarryover, 0);
+  const grandPrevCarry = filteredBilling.reduce((s, fb) => s + (fb.prevInvoice || 0), 0);
+  const grandPrevCarryNet = filteredBilling.reduce((s, fb) => s + fb.prevCarryover, 0);
   const grandNextCarry = filteredBilling.reduce((s, fb) => s + fb.nextCarryover, 0);
 
   // Excel実績データの集計
@@ -10604,6 +10608,8 @@ function BillingPage({
         '<tr><td class="label">今月診療代合計</td><td class="amount">' + totalTaxIncl.toLocaleString() + '円</td></tr>' +
         '<tr><td class="label">（10%対象額合計</td><td class="amount">' + totalTaxExcl.toLocaleString() + '円）</td></tr>' +
         '<tr><td class="label">（内10%消費税額</td><td class="amount">' + totalTax.toLocaleString() + '円）</td></tr>' +
+        ((fb.prevInvoice || fb.monthPayments) ? '<tr><td class="label">前回請求額</td><td class="amount">' + (fb.prevInvoice || 0).toLocaleString() + '円</td></tr>' +
+        '<tr><td class="label">今回ご入金額</td><td class="amount">' + (fb.monthPayments || 0).toLocaleString() + '円</td></tr>' : '') +
         '<tr><td class="label">繰越額</td><td class="amount">' + prevCarry.toLocaleString() + '円</td></tr>' +
         '<tr><td class="label">調整額</td><td class="amount">' + (adj ? adj.toLocaleString() + '円' : '円') + '</td></tr>' +
         '<tr class="grand"><td class="label">今回ご請求額</td><td class="amount">' + grandTotal.toLocaleString() + '円</td></tr>' +
@@ -11017,8 +11023,8 @@ function BillingPage({
         marginBottom: 16
       }
     }, [{
-      l: "前月繰越",
-      v: fb.prevCarryover,
+      l: "前回請求額",
+      v: fb.prevInvoice,
       c: "#fef3c7"
     }, {
       l: "当月請求",
@@ -11502,10 +11508,10 @@ function BillingPage({
       const ti = v => v + Math.floor(v * 0.1);
       const grandAdj = filteredBilling.reduce((s, fb) => s + (fb.adjustment || 0), 0);
       const grandInvoice = filteredBilling.reduce((s, fb) => s + (fb.invoiceTotal || 0), 0);
-      return [{l:"一般診療（税抜）",v:grandGeneral,c:"#dbeafe",note:"税込 ¥" + ti(grandGeneral).toLocaleString()},{l:"繁殖診療（税抜）",v:grandBreeding,c:"#fce7f3",note:"税込 ¥" + ti(grandBreeding).toLocaleString()},{l:"薬事診療（税抜）",v:grandPharma,c:"#fef3c7",note:"税込 ¥" + ti(grandPharma).toLocaleString()},{l:"当月診療代合計（税込）",v:ti(grandTotal),c:"#dcfce7",note:"税抜 ¥" + grandTotal.toLocaleString() + "（FM「今月診療代合計」に対応）"},{l:"今回請求額合計（税込）",v:grandInvoice,c:"#ede9fe",note:"繰越 ¥" + grandPrevCarry.toLocaleString() + (grandAdj ? " / 調整 ¥" + grandAdj.toLocaleString() : "")}];
+      return [{l:"一般診療（税抜）",v:grandGeneral,c:"#dbeafe",note:"税込 ¥" + ti(grandGeneral).toLocaleString()},{l:"繁殖診療（税抜）",v:grandBreeding,c:"#fce7f3",note:"税込 ¥" + ti(grandBreeding).toLocaleString()},{l:"薬事診療（税抜）",v:grandPharma,c:"#fef3c7",note:"税込 ¥" + ti(grandPharma).toLocaleString()},{l:"当月診療代合計（税込）",v:ti(grandTotal),c:"#dcfce7",note:"税抜 ¥" + grandTotal.toLocaleString() + "（FM「今月診療代合計」に対応）"},{l:"今回請求額合計（税込）",v:grandInvoice,c:"#ede9fe",note:"繰越 ¥" + grandPrevCarryNet.toLocaleString() + (grandAdj ? " / 調整 ¥" + grandAdj.toLocaleString() : "")}];
     }
     var rate2 = grandTotal > 0 ? Math.round(grandPayments / (grandPrevCarry + grandTotal) * 100) + "%" : "—";
-    return [{l:"前月繰越合計",v:grandPrevCarry,c:"#fef3c7"},{l:"当月請求",v:grandTotal,c:"#dbeafe"},{l:"当月入金",v:grandPayments,c:"#dcfce7"},{l:"売掛残高",v:grandNextCarry,c:grandNextCarry>0?"#fee2e2":"#dcfce7"},{l:"回収率",v:0,c:"#f3f4f6",sub:rate2}];
+    return [{l:"前回請求額合計",v:grandPrevCarry,c:"#fef3c7"},{l:"当月請求",v:grandTotal,c:"#dbeafe"},{l:"当月入金",v:grandPayments,c:"#dcfce7"},{l:"売掛残高",v:grandNextCarry,c:grandNextCarry>0?"#fee2e2":"#dcfce7"},{l:"回収率",v:0,c:"#f3f4f6",sub:rate2}];
   })().map((s, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "card",
@@ -11717,7 +11723,7 @@ function BillingPage({
     style: {
       textAlign: "right"
     }
-  }, "\u524D\u6708\u7E70\u8D8A"), /*#__PURE__*/React.createElement("th", {
+  }, "\u524D\u56DE\u8ACB\u6C42\u984D"), /*#__PURE__*/React.createElement("th", {
     style: {
       textAlign: "right"
     }
@@ -11745,9 +11751,9 @@ function BillingPage({
   }, fb.farm.billingCycle || "末〆")), /*#__PURE__*/React.createElement("td", {
     style: {
       textAlign: "right",
-      color: fb.prevCarryover > 0 ? "#dc2626" : "#111"
+      color: fb.prevInvoice > 0 ? "#dc2626" : "#111"
     }
-  }, fb.prevCarryover !== 0 ? "¥" + fb.prevCarryover.toLocaleString() : ""), /*#__PURE__*/React.createElement("td", {
+  }, fb.prevInvoice !== 0 ? "¥" + fb.prevInvoice.toLocaleString() : ""), /*#__PURE__*/React.createElement("td", {
     style: {
       textAlign: "right"
     }
