@@ -10209,7 +10209,9 @@ function BillingPage({
   // 指定月の入金額を計算
   const calcFarmMonthPayments = (farmId, y, m) => {
     const period = getPeriod("末〆", y, m); // 入金は暦月で管理
-    return (payments || []).filter(p => p.farmId === farmId && p.date >= period.start && p.date <= period.end).reduce((s, p) => s + p.amount, 0);
+    const ym = y + "-" + String(m).padStart(2, "0");
+    // applyYm（FM請求書の「どの月のレコードに入金として記録されたか」）があればそちらを優先。FMは入金日ではなく記録した月の請求書で繰越を減らす
+    return (payments || []).filter(p => p.farmId === farmId && (p.applyYm ? p.applyYm === ym : (p.date >= period.start && p.date <= period.end))).reduce((s, p) => s + p.amount, 0);
   };
 
   // 繰越計算: 期首繰越 + 各月(請求-入金) を積算
@@ -10244,7 +10246,8 @@ function BillingPage({
           const billing = calcFarmMonthBilling(farm, y, m);
           const paid = calcFarmMonthPayments(farmId, y, m);
           const adjE = ((ba[y] || {})[farmId] || {})[m];
-          balance += billing.total + Math.floor(billing.total * 0.1) + (adjE && Number(adjE.appAdj) || 0) - paid;   // 税込で繰越（FileMakerと同じ）
+          const adjV = adjE ? ((adjE.appAdj != null && adjE.appAdj !== "") ? Number(adjE.appAdj) || 0 : Number(adjE.adj) || 0) : 0;
+          balance += billing.total + Math.floor(billing.total * 0.1) + adjV - paid;   // 税込で繰越（FileMakerと同じ）
         }
       }
       m++;
@@ -10260,7 +10263,9 @@ function BillingPage({
   const getAppAdj = (fid, y, m) => {
     const e = ((billingActual || {})[y] || {})[fid];
     const fd = e && e[m];
-    return { amount: fd && Number(fd.appAdj) || 0, memo: (fd && fd.appAdjMemo) || "" };
+    if (fd && fd.appAdj != null && fd.appAdj !== "") return { amount: Number(fd.appAdj) || 0, memo: fd.appAdjMemo || "" };
+    if (fd && fd.adj) return { amount: Number(fd.adj) || 0, memo: fd.appAdjMemo || "FM調整額" };   // FM請求書の「調整額税込み」をそのまま反映
+    return { amount: 0, memo: (fd && fd.appAdjMemo) || "" };
   };
   const setAppAdj = (fid, y, m, amount, memo) => {
     if (!onUpdateBillingActual) return;
@@ -15636,7 +15641,7 @@ function App() {
               if (pc[0] < 0) return;
               var amt = Number(String(r[pc[0]] == null ? "" : r[pc[0]]).replace(/,/g, "")) || 0;
               var dt = pc[1] >= 0 ? toDate(r[pc[1]]) : "";
-              if (amt > 0 && dt) importedPays.push({ farmId: fid, date: dt, amount: amt, method: "振込", memo: "FM請求書より（" + yr + "年" + mo + "月）" });
+              if (amt > 0 && dt) importedPays.push({ farmId: fid, date: dt, amount: amt, method: "振込", memo: "FM請求書より（" + yr + "年" + mo + "月）", applyYm: yr + "-" + String(mo).padStart(2, "0") });
             });
             fileCount++;
             yearsImported.add(yr);
@@ -15660,7 +15665,8 @@ function App() {
                 removedAuto += before - next.length;
               });
               importedPays.forEach(function(ip, i) {
-                if (next.some(function(p) { return p.farmId === ip.farmId && p.date === ip.date && p.amount === ip.amount; })) return;
+                var dup = next.find(function(p) { return p.farmId === ip.farmId && p.date === ip.date && p.amount === ip.amount; });
+                if (dup) { if (dup.applyYm !== ip.applyYm) { var idx = next.indexOf(dup); next[idx] = Object.assign({}, dup, { applyYm: ip.applyYm }); } return; }
                 next.push(Object.assign({ id: Date.now() + i }, ip)); addedPays++;
               });
               return next;
