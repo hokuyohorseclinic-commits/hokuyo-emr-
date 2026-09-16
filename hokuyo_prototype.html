@@ -11703,7 +11703,7 @@ function BillingPage({
       textAlign: "right",
       fontSize: 16
     }
-  }, "\xA5", grandTotal.toLocaleString()), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right"}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.adjustment, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right", fontWeight: 700}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.invoiceTotal, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", null)))), billingTab === "ledger" && /*#__PURE__*/React.createElement("div", {
+  }, "\xA5", grandTotal.toLocaleString(), React.createElement("div", {style: {fontSize: 10, color: "#6b7280", fontWeight: 400}}, "\u7A0E\u8FBC \xA5" + (grandTotal + Math.floor(grandTotal * 0.1)).toLocaleString())), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right"}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.adjustment, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right", fontWeight: 700}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.invoiceTotal, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", null)))), billingTab === "ledger" && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       overflow: "auto",
