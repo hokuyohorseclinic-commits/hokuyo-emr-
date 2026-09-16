@@ -7263,7 +7263,7 @@ function GeneralKartePage({
   const pastVisits = kase?.visits || [];
   const [visitDate, setVisitDate] = useState(todayJST());
   const [visitType, setVisitType] = useState(isNew ? "\u521D\u8A3A" : "");
-  const visitFee = visitType === "\u521D\u8A3A" ? 2000 : visitType === "\u518D\u8A3A" ? 1000 : 0;
+  const visitFee = visitType === "\u521D\u8A3A" ? 1500 : visitType === "\u518D\u8A3A" ? 750 : 0; // FileMaker準拠：初診1,500／再診750
   const [editVisitIdx, setEditVisitIdx] = useState(-1);
   const loadVisit = (v, idx) => {
     setEditVisitIdx(idx);
@@ -7333,7 +7333,7 @@ function GeneralKartePage({
     var pp = r.useRx && d.rxPrice ? d.rxPrice : d.pricePerUnit;
     return s + Math.round(pp * (Number(r.dose) || 0));
   }, 0);
-  const vehicleFee = vehicleKm ? Math.round(Number(vehicleKm) * 80) : 0;
+  const vehicleFee = vehicleKm ? Math.round(Number(vehicleKm) * 120) : 0; // 請求計算(calcVisitTotal)と同じ 120円/km
   const currentTotal = visitFee + treatTotal + drugTotal + vehicleFee + Number(adjustFee || 0);
   const pastTotal = pastVisits.reduce((s, v) => s + calcVisitTotal(v, drugsMaster), 0);
   const grandTotal = pastTotal + currentTotal;
@@ -10217,7 +10217,8 @@ function BillingPage({
     while (y < upToYear || y === upToYear && m < upToMonth) {
       // billingActual（Excel取込実績）が存在する月はその確定値を使用
       const baYear = ba[y] || {};
-      const baMonth = (baYear[farmId] && baYear[farmId][m]) ? baYear[farmId][m] : null;
+      const baMonth0 = (baYear[farmId] && baYear[farmId][m]) ? baYear[farmId][m] : null;
+      const baMonth = baMonth0 && (baMonth0.monthly || baMonth0.invoice || baMonth0.carryIn || baMonth0.nextCarry) ? baMonth0 : null;  // 調整額だけの行はFM実績扱いにしない
       if (baMonth) {
         balance = baMonth.nextCarry || 0;
       } else {
@@ -10225,7 +10226,8 @@ function BillingPage({
         if (farm) {
           const billing = calcFarmMonthBilling(farm, y, m);
           const paid = calcFarmMonthPayments(farmId, y, m);
-          balance += billing.total - paid;
+          const adjE = ((ba[y] || {})[farmId] || {})[m];
+          balance += billing.total + Math.floor(billing.total * 0.1) + (adjE && Number(adjE.appAdj) || 0) - paid;   // 税込で繰越（FileMakerと同じ）
         }
       }
       m++;
@@ -10237,6 +10239,18 @@ function BillingPage({
     return balance;
   };
 
+  // ── 請求書単位の調整額（税込・FileMakerの「調整額税込み」相当）：billingActual[y][farmId][m].appAdj に保存（同期対象）
+  const getAppAdj = (fid, y, m) => {
+    const e = ((billingActual || {})[y] || {})[fid];
+    const fd = e && e[m];
+    return { amount: fd && Number(fd.appAdj) || 0, memo: (fd && fd.appAdjMemo) || "" };
+  };
+  const setAppAdj = (fid, y, m, amount, memo) => {
+    if (!onUpdateBillingActual) return;
+    onUpdateBillingActual(y, fid, m, "appAdj", Number(amount) || 0);
+    onUpdateBillingActual(y, fid, m, "appAdjMemo", memo || "");
+  };
+  const taxIncl = (v) => v + Math.floor(v * 0.1);
   // 当月データ
   const farmBilling = useMemo(() => {
     const y = Number(billingYear);
@@ -10254,7 +10268,10 @@ function BillingPage({
       const caseCount = generalCases.length + breedingCases.length + pharmaCases.length;
       const monthPayments = calcFarmMonthPayments(farm.id, y, m);
       const prevCarryover = calcCarryover(farm.id, y, m);
-      const nextCarryover = prevCarryover + total - monthPayments;
+      const adjInfo = getAppAdj(farm.id, y, m);
+      const adjustment = adjInfo.amount;               // 税込
+      const invoiceTotal = prevCarryover + taxIncl(total) + adjustment;   // 今回ご請求額（税込）＝FileMakerの「今回請求額」
+      const nextCarryover = invoiceTotal - monthPayments;
       return {
         farm,
         period,
@@ -10265,13 +10282,17 @@ function BillingPage({
         breedingTotal,
         pharmaTotal,
         total,
+        totalTaxIncl: taxIncl(total),
+        adjustment,
+        adjustmentMemo: adjInfo.memo,
+        invoiceTotal,
         caseCount,
         monthPayments,
         prevCarryover,
         nextCarryover
       };
-    }).filter(x => x.caseCount > 0 || x.prevCarryover !== 0 || x.monthPayments > 0).sort((a, b) => b.total - a.total);
-  }, [cases, horses, farms, drugsMaster, billingYear, billingMonth, payments, carryover]);
+    }).filter(x => x.caseCount > 0 || x.prevCarryover !== 0 || x.monthPayments > 0 || x.adjustment !== 0).sort((a, b) => b.total - a.total);
+  }, [cases, horses, farms, drugsMaster, billingYear, billingMonth, payments, carryover, billingActual]);
   const filteredBilling = farmBilling.filter(fb => {
     if (billingCycleFilter && (fb.farm.billingCycle || "末〆") !== billingCycleFilter) return false;
     if (searchFarm) {
@@ -10337,6 +10358,7 @@ function BillingPage({
     Object.keys(baYear).forEach(fid => {
       const fd = baYear[fid][m];
       if (!fd) return;
+      if (!(fd.monthly || fd.invoice || fd.carryIn || fd.nextCarry)) return;  // アプリ側の調整額だけの行は表示しない
       const farm = farms.find(f => f.id === Number(fid));
       const farmName = farm ? farm.name : "ID:" + fid;
       const cycle = farm ? (farm.billingCycle || "末〆") : "末〆";
@@ -11572,7 +11594,7 @@ function BillingPage({
     style: {
       textAlign: "right"
     }
-  }, "\u5408\u8A08"), /*#__PURE__*/React.createElement("th", null, "\u72B6\u614B"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, filteredBilling.filter(fb => fb.caseCount > 0).map(fb => {
+  }, "\u5408\u8A08"), /*#__PURE__*/React.createElement("th", {style: {textAlign: "right"}}, "\u8ABF\u6574(\u7A0E\u8FBC)"), /*#__PURE__*/React.createElement("th", {style: {textAlign: "right"}}, "\u8ACB\u6C42\u984D(\u7A0E\u8FBC)"), /*#__PURE__*/React.createElement("th", null, "\u72B6\u614B"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, filteredBilling.filter(fb => fb.caseCount > 0 || fb.adjustment !== 0).map(fb => {
     const closed = isMonthClosed(fb.farm.id);
     const rec = getClosedRecord(fb.farm.id);
     const amountChanged = rec && !rec.reopened && rec.amount !== fb.total;
@@ -11607,7 +11629,24 @@ function BillingPage({
       textAlign: "right",
       fontWeight: 700
     }
-  }, "\xA5", fb.total.toLocaleString(), amountChanged && React.createElement("div", {style: {fontSize: 9, color: "#dc2626"}}, "\u7DE0\u3081\u6642\u304B\u3089\u5DEE\u984D \xA5" + (fb.total - rec.amount).toLocaleString())), /*#__PURE__*/React.createElement("td", null,
+  }, "\xA5", fb.total.toLocaleString(), amountChanged && React.createElement("div", {style: {fontSize: 9, color: "#dc2626"}}, "\u7DE0\u3081\u6642\u304B\u3089\u5DEE\u984D \xA5" + (fb.total - rec.amount).toLocaleString())),
+  /*#__PURE__*/React.createElement("td", {
+    style: {textAlign: "right", color: fb.adjustment ? "#ea580c" : "#d1d5db", cursor: "pointer", textDecoration: "underline dotted"},
+    title: fb.adjustmentMemo || "\u30AF\u30EA\u30C3\u30AF\u3067\u8ABF\u6574\u984D\uFF08\u5024\u5F15\u304D\u306F\u30DE\u30A4\u30CA\u30B9\uFF09\u3092\u5165\u529B",
+    onClick: e => {
+      e.stopPropagation();
+      const v = prompt(fb.farm.name + " " + billingYear + "\u5E74" + billingMonth + "\u6708\u306E\u8ABF\u6574\u984D\uFF08\u7A0E\u8FBC\u30FB\u5186\uFF09\u3002\u5024\u5F15\u304D\u306F\u30DE\u30A4\u30CA\u30B9\u3001\u53D6\u308A\u6D88\u3057\u306F 0", String(fb.adjustment || 0));
+      if (v === null) return;
+      const amt = Number(String(v).replace(/[,\uFF0C\uFFE5\xA5\s]/g, ""));
+      if (isNaN(amt)) return alert("\u6570\u5B57\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+      let memo = fb.adjustmentMemo || "";
+      if (amt !== 0) { const mm = prompt("\u8ABF\u6574\u306E\u7406\u7531\uFF08\u8ACB\u6C42\u66F8\u306B\u306F\u8F09\u308A\u307E\u305B\u3093\uFF09", memo); if (mm !== null) memo = mm; }
+      setAppAdj(fb.farm.id, Number(billingYear), Number(billingMonth), amt, memo);
+    }
+  }, fb.adjustment ? (fb.adjustment > 0 ? "+" : "") + "\xA5" + fb.adjustment.toLocaleString() : "\u2014"),
+  /*#__PURE__*/React.createElement("td", {style: {textAlign: "right", fontWeight: 700}}, "\xA5", fb.invoiceTotal.toLocaleString(),
+    fb.prevCarryover ? React.createElement("div", {style: {fontSize: 9, color: "#6b7280"}}, "\u7E70\u8D8A \xA5" + fb.prevCarryover.toLocaleString()) : null),
+  /*#__PURE__*/React.createElement("td", null,
     closed ? React.createElement("span", {className: "badge badge-green", style: {cursor: "pointer"}, onClick: e => { e.stopPropagation(); reopenMonth(fb); }, title: "\u30AF\u30EA\u30C3\u30AF\u3067\u7DE0\u3081\u89E3\u9664"}, "\u2713 \u7DE0\u3081\u6E08") :
     React.createElement("span", {className: "badge badge-orange", style: {cursor: "pointer"}, onClick: e => { e.stopPropagation(); closeMonth(fb); }, title: "\u30AF\u30EA\u30C3\u30AF\u3067\u7DE0\u3081\u5B9F\u884C"}, "\u672A\u7DE0\u3081")
   ), /*#__PURE__*/React.createElement("td", {
@@ -11645,7 +11684,7 @@ function BillingPage({
       textAlign: "right",
       fontSize: 16
     }
-  }, "\xA5", grandTotal.toLocaleString()), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", null)))), billingTab === "ledger" && /*#__PURE__*/React.createElement("div", {
+  }, "\xA5", grandTotal.toLocaleString()), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right"}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.adjustment, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", {style: {textAlign: "right", fontWeight: 700}}, "\xA5", filteredBilling.reduce((s, fb) => s + fb.invoiceTotal, 0).toLocaleString()), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", null)))), billingTab === "ledger" && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       overflow: "auto",
@@ -11663,7 +11702,7 @@ function BillingPage({
     style: {
       textAlign: "right"
     }
-  }, "\u5F53\u6708\u8ACB\u6C42"), /*#__PURE__*/React.createElement("th", {
+  }, "\u5F53\u6708\u8ACB\u6C42(\u7A0E\u8FBC)"), /*#__PURE__*/React.createElement("th", {
     style: {
       textAlign: "right"
     }
@@ -11693,7 +11732,7 @@ function BillingPage({
     style: {
       textAlign: "right"
     }
-  }, "\xA5", fb.total.toLocaleString()), /*#__PURE__*/React.createElement("td", {
+  }, "\xA5", (fb.totalTaxIncl + fb.adjustment).toLocaleString(), React.createElement("div", {style: {fontSize: 9, color: "#9ca3af"}}, "\u7A0E\u8FBC")), /*#__PURE__*/React.createElement("td", {
     style: {
       textAlign: "right",
       color: "#16a34a"
@@ -13870,7 +13909,10 @@ function PharmaInputPage({
     if (lastAddedHorseId) { setSelectedHorse(String(lastAddedHorseId)); setUseHorse(true); }
   }, [lastAddedHorseId]);
   const [note, setNote] = useState(kase?.note || "");
-  const [items, setItems] = useState(kase?.pharmaItems || [{
+  const VEHICLE_DRUG_ID = 90000; // 薬品マスタ「車両料金」(120円/km)：FileMakerの薬事伝票と同じく配達の車両料金を計上
+  const _initVeh = (kase?.pharmaItems || []).find(r => Number(r.drugId) === VEHICLE_DRUG_ID);
+  const [vehicleKm, setVehicleKm] = useState(_initVeh ? String(_initVeh.dose || "") : (kase?.vehicleKm ? String(kase.vehicleKm) : ""));
+  const [items, setItems] = useState((kase?.pharmaItems || []).filter(r => Number(r.drugId) !== VEHICLE_DRUG_ID).length ? kase.pharmaItems.filter(r => Number(r.drugId) !== VEHICLE_DRUG_ID) : [{
     drugId: "",
     dose: "",
     memo: "",
@@ -13899,7 +13941,8 @@ function PharmaInputPage({
     }
     return nr;
   }));
-  const total = items.reduce((s, r) => s + r.price, 0);
+  const vehicleFee = vehicleKm ? Math.round(Number(vehicleKm) * 120) : 0;
+  const total = items.reduce((s, r) => s + r.price, 0) + vehicleFee;
 
   // Auto-save
   useEffect(() => {
@@ -13915,12 +13958,13 @@ function PharmaInputPage({
         caseStatus: "完了",
         vet: kase?.vet || currentVet || "佐藤",
         note,
+        vehicleKm: Number(vehicleKm) || 0,
         pharmaItems: items.filter(r => r.drugId).map(r => ({
           drugId: Number(r.drugId),
           dose: Number(r.dose) || 0,
           memo: r.memo,
           price: r.price
-        }))
+        })).concat(vehicleFee > 0 ? [{ drugId: VEHICLE_DRUG_ID, dose: Number(vehicleKm), memo: "", price: vehicleFee }] : [])
       };
       if (onSave) onSave(updated);
       setSaveStatus("保存済");
@@ -13928,7 +13972,7 @@ function PharmaInputPage({
       return () => clearTimeout(t2);
     }, 500);
     return () => clearTimeout(timer);
-  }, [openDate, useHorse, selectedHorse, selectedFarm, note, items]);
+  }, [openDate, useHorse, selectedHorse, selectedFarm, note, items, vehicleKm]);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -14072,6 +14116,17 @@ function PharmaInputPage({
       }
     }, f.owner), farmUsage[f.id] && /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#9ca3af"}}, farmUsage[f.id]+"回"))
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "lbl"
+  }, "\u8ECA\u4E21\u8DDD\u96E2\uFF08km\uFF09"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:8}}, /*#__PURE__*/React.createElement("input", {
+    className: "inp",
+    type: "number",
+    min: 0,
+    step: 1,
+    style: {width: 100},
+    value: vehicleKm,
+    onChange: e => setVehicleKm(e.target.value),
+    placeholder: "0"
+  }), /*#__PURE__*/React.createElement("span", {style:{fontSize:12,color:"#6b7280"}}, "\u8ECA\u4E21\u6599\u91D1 \xA5", vehicleFee.toLocaleString(), "\uFF08120\u5186/km\uFF09"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
   }, "\u30E1\u30E2"), /*#__PURE__*/React.createElement("textarea", {
     className: "inp",
