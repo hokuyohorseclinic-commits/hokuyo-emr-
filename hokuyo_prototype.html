@@ -4184,6 +4184,12 @@ var d=(v.drugs||[]).reduce(function(s,r){if(r.fee)return s+r.fee;var dr=dm.find(
 var vf=v.vehicleKm?Math.round(Number(v.vehicleKm)*120):0;
 return viFee+t+d+vf+Number(v.adjustFee||0);
 }
+// ── 請求の帰属ルール（FileMaker準拠）──
+// ・牧場：カルテに farmId があればそれ（診療当時の管理者）、無ければ馬マスタの所属牧場
+// ・一般カルテの計上月：FileMaker取込分（source==="FM"）はカルテの診療日（openDate）の月に全診療をまとめて計上（FMの請求書と同じ）
+//   アプリで作ったカルテは診療日ごとにその月へ計上
+function caseBelongsToFarm(c, farmId, farmHorseIds){ if (c && c.farmId) return Number(c.farmId) === Number(farmId); return !!(c && c.horseId && farmHorseIds && farmHorseIds.has(c.horseId)); }
+function visitInPeriod(c, v, start, end){ if (!v || !v.date) return false; if (c && c.source === "FM" && c.type === "一般") { var d = c.openDate || ""; return d >= start && d <= end; } return v.date >= start && v.date <= end; }
 function calcCaseTotal(c,dm){
 if(c.type==="一般")return(c.visits||[]).reduce(function(s,v){return s+calcVisitTotal(v,dm);},0);
 if(c.type==="薬事")return(c.pharmaItems||[]).reduce(function(s,x){return s+x.price;},0);
@@ -10187,11 +10193,11 @@ function BillingPage({
   const calcFarmMonthBilling = (farm, y, m) => {
     const period = getPeriod(farm.billingCycle || "末〆", y, m);
     const farmHorseIds = new Set(horses.filter(h => h.farmId === farm.id).map(h => h.id));
-    const generalTotal = cases.filter(c => c.type === "一般" && farmHorseIds.has(c.horseId)).reduce((s, c) => {
-      return s + (c.visits || []).filter(v => v.date && v.date >= period.start && v.date <= period.end).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0);
+    const generalTotal = cases.filter(c => c.type === "一般" && caseBelongsToFarm(c, farm.id, farmHorseIds)).reduce((s, c) => {
+      return s + (c.visits || []).filter(v => visitInPeriod(c, v, period.start, period.end)).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0);
     }, 0);
-    const breedingTotal = cases.filter(c => c.type === "繁殖" && farmHorseIds.has(c.horseId)).reduce((s, c) => s + calcBreedingPeriodTotal(c, period.start, period.end), 0);
-    const pharmaTotal = cases.filter(c => c.type === "薬事" && (c.farmId === farm.id || c.horseId && farmHorseIds.has(c.horseId)) && getCaseDate(c) >= period.start && getCaseDate(c) <= period.end).reduce((s, c) => (c.pharmaItems || []).reduce((ss, pi) => ss + (pi.price || 0), s), 0);
+    const breedingTotal = cases.filter(c => c.type === "繁殖" && caseBelongsToFarm(c, farm.id, farmHorseIds)).reduce((s, c) => s + calcBreedingPeriodTotal(c, period.start, period.end), 0);
+    const pharmaTotal = cases.filter(c => c.type === "薬事" && caseBelongsToFarm(c, farm.id, farmHorseIds) && getCaseDate(c) >= period.start && getCaseDate(c) <= period.end).reduce((s, c) => (c.pharmaItems || []).reduce((ss, pi) => ss + (pi.price || 0), s), 0);
     return {
       generalTotal,
       breedingTotal,
@@ -10258,10 +10264,10 @@ function BillingPage({
     return farms.map(farm => {
       const period = getPeriod(farm.billingCycle || "末〆");
       const farmHorseIds = new Set(horses.filter(h => h.farmId === farm.id).map(h => h.id));
-      const generalCases = cases.filter(c => c.type === "一般" && farmHorseIds.has(c.horseId) && (c.visits||[]).some(v => v.date && v.date >= period.start && v.date <= period.end));
-      const breedingCases = cases.filter(c => c.type === "繁殖" && farmHorseIds.has(c.horseId) && (c.findings||[]).some(f => f.date >= period.start && f.date <= period.end));
-      const pharmaCases = cases.filter(c => c.type === "薬事" && (c.farmId === farm.id || c.horseId && farmHorseIds.has(c.horseId)) && getCaseDate(c) >= period.start && getCaseDate(c) <= period.end);
-      const generalTotal = generalCases.reduce((s, c) => s + (c.visits||[]).filter(v => v.date && v.date >= period.start && v.date <= period.end).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0), 0);
+      const generalCases = cases.filter(c => c.type === "一般" && caseBelongsToFarm(c, farm.id, farmHorseIds) && (c.visits||[]).some(v => visitInPeriod(c, v, period.start, period.end)));
+      const breedingCases = cases.filter(c => c.type === "繁殖" && caseBelongsToFarm(c, farm.id, farmHorseIds) && (c.findings||[]).some(f => f.date >= period.start && f.date <= period.end));
+      const pharmaCases = cases.filter(c => c.type === "薬事" && caseBelongsToFarm(c, farm.id, farmHorseIds) && getCaseDate(c) >= period.start && getCaseDate(c) <= period.end);
+      const generalTotal = generalCases.reduce((s, c) => s + (c.visits||[]).filter(v => visitInPeriod(c, v, period.start, period.end)).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0), 0);
       const breedingTotal = breedingCases.reduce((s, c) => s + calcBreedingPeriodTotal(c, period.start, period.end), 0);
       const pharmaTotal = pharmaCases.reduce((s, c) => (c.pharmaItems || []).reduce((ss, pi) => ss + (pi.price || 0), s), 0);
       const total = generalTotal + breedingTotal + pharmaTotal;
@@ -10477,7 +10483,7 @@ function BillingPage({
       const horseName = h?.name || "";
       const diag = c.diagnosis || "診療";
       const allVisits = c.visits || [];
-      const periodVisits = allVisits.filter(v => v.date && v.date >= fb.period.start && v.date <= fb.period.end);
+      const periodVisits = allVisits.filter(v => visitInPeriod(c, v, fb.period.start, fb.period.end));
       if (periodVisits.length === 0) return;
       const periodTotal = periodVisits.reduce((s, v) => s + calcVisitTotal(v, drugsMaster), 0);
       const firstDate = periodVisits.map(v => v.date).sort()[0];
@@ -10610,7 +10616,7 @@ function BillingPage({
     fb.generalCases.filter(c => c.horseId === horseId).forEach(c => {
       const diag = c.diagnosis || "診療";
       const allVisits = c.visits || [];
-      const periodVisits = allVisits.filter(v => v.date && v.date >= fb.period.start && v.date <= fb.period.end);
+      const periodVisits = allVisits.filter(v => visitInPeriod(c, v, fb.period.start, fb.period.end));
       if (periodVisits.length === 0) return;
       periodVisits.forEach(v => {
         const total = calcVisitTotal(v, drugsMaster);
@@ -10737,7 +10743,7 @@ function BillingPage({
       const items = [];
       fb.generalCases.filter(c => c.horseId === horseId).forEach(c => {
         const diag = c.diagnosis || "診療";
-        (c.visits || []).filter(v => v.date && v.date >= fb.period.start && v.date <= fb.period.end).forEach(v => {
+        (c.visits || []).filter(v => visitInPeriod(c, v, fb.period.start, fb.period.end)).forEach(v => {
           items.push({ date: v.date, desc: diag, treatment: "", amount: calcVisitTotal(v, drugsMaster), section: "一般" });
         });
       });
@@ -11096,7 +11102,7 @@ function BillingPage({
         const pStart = fb.period.start || "";
         const pEnd = fb.period.end || "";
         const gTotal = fb.generalCases.filter(c => c.horseId === hid).reduce((s, c) => {
-          return s + (c.visits || []).filter(v => v.date && v.date >= pStart && v.date <= pEnd).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0);
+          return s + (c.visits || []).filter(v => visitInPeriod(c, v, pStart, pEnd)).reduce((vs, v) => vs + calcVisitTotal(v, drugsMaster), 0);
         }, 0);
         const bm = typeof INIT_BREEDING_TREATMENTS !== "undefined" ? INIT_BREEDING_TREATMENTS : [];
         const bTotal = fb.breedingCases.filter(c => c.horseId === hid).reduce((s, c) => {
