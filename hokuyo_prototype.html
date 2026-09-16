@@ -10222,16 +10222,21 @@ function BillingPage({
     let y = startY;
     let m = startM;
     const ba = billingActual || {};
+    // 1月がFM実績なら、期首残高（=2025年12月の請求額）は FMの1月繰越額＋1月に記録された入金 で復元する
+    const baJan0 = ((ba[startY] || {})[farmId] || {})[startM];
+    if (baJan0 && baJan0.monthly != null) {
+      balance = (baJan0.carryIn || 0) + calcFarmMonthPayments(farmId, startY, startM);
+    }
     while (y < upToYear || y === upToYear && m < upToMonth) {
       // billingActual（Excel取込実績）が存在する月はその確定値を使用
       const baYear = ba[y] || {};
       const baMonth0 = (baYear[farmId] && baYear[farmId][m]) ? baYear[farmId][m] : null;
-      const baMonth = baMonth0 && (baMonth0.monthly || baMonth0.invoice || baMonth0.carryIn || baMonth0.nextCarry) ? baMonth0 : null;  // 調整額だけの行はFM実績扱いにしない
+      const baMonth = baMonth0 && baMonth0.monthly != null ? baMonth0 : null;  // 調整額だけの行（アプリ側入力）はFM実績扱いにしない。取込行は0でもFM実績
       if (baMonth) {
         // FMの「来月繰越額」＝請求額−翌月の入金。最終月などで未確定（null）の場合は請求額をそのまま繰越とし、翌月の入金はアプリ側で差し引く
         const nextY = m === 12 ? y + 1 : y, nextM = m === 12 ? 1 : m + 1;
         const nextBa = ((ba[nextY] || {})[farmId] || {})[nextM];
-        const nextIsFM = nextBa && (nextBa.monthly || nextBa.invoice || nextBa.carryIn || nextBa.nextCarry);
+        const nextIsFM = nextBa && nextBa.monthly != null;
         // 返す値は「その月の今回請求額（税込）」＝翌月に受ける入金を引く前の残高。翌月側で入金を差し引いて繰越額にする（FMと同じ）
         if (baMonth.invoice) {
           balance = baMonth.invoice || 0;
