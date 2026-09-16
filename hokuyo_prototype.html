@@ -15538,6 +15538,21 @@ function App() {
     let merged = JSON.parse(JSON.stringify(billingActual));
     let filesProcessed = 0;
     let importedPays = [];
+    let clearedMonths = {};   // 取込ファイルに含まれる年月は、まず既存のFM実績を消してから入れ直す（古い部分エクスポートの残骸を残さない）
+    const clearMonth = (yr, mo) => {
+      var key = yr + "-" + mo;
+      if (clearedMonths[key]) return;
+      clearedMonths[key] = true;
+      var yd = merged[yr] || {};
+      Object.keys(yd).forEach(fid => {
+        var e = yd[fid] && yd[fid][mo];
+        if (!e) return;
+        var keep = {};
+        if (e.appAdj) keep.appAdj = e.appAdj;
+        if (e.appAdjMemo) keep.appAdjMemo = e.appAdjMemo;
+        if (Object.keys(keep).length) yd[fid][mo] = keep; else delete yd[fid][mo];
+      });
+    };
     files.forEach(file => {
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -15593,15 +15608,21 @@ function App() {
             var ar = colAr >= 0 ? (r[colAr] === "" || r[colAr] == null ? null : (Number(r[colAr]) || 0)) : null;
             var adj = colAdj >= 0 ? (Number(r[colAdj]) || 0) : 0;
             if (!merged[yr]) merged[yr] = {};
+            clearMonth(yr, mo);
             if (!merged[yr][fid]) merged[yr][fid] = {};
-            merged[yr][fid][mo] = {monthly: monthly, invoice: invoice, carryIn: carryIn, ar: ar, nextCarry: nextCarry, adj: adj};
+            var prevE = merged[yr][fid][mo] || {};
+            merged[yr][fid][mo] = Object.assign({}, prevE, {monthly: monthly, invoice: invoice, carryIn: carryIn, ar: ar, nextCarry: nextCarry, adj: adj});
             if (colFarmName >= 0 && r[colFarmName]) {
               var fname = String(r[colFarmName]).trim();
-              if (fname && !farms.find(f => f.id === fid)) {
+              var exF = farms.find(f => f.id === fid);
+              if (fname && !exF) {
                 setFarms(prev => {
                   if (prev.find(f => f.id === fid)) return prev;
                   return [...prev, {id: fid, name: fname, owner: "", phone: "", address: "", zip: "", billingCycle: "末〆", priority: "", breeding: false, general: true}];
                 });
+              } else if (fname && exF && /^牧場\d+$/.test(exF.name || "")) {
+                // FMカルテ取込時の仮名（牧場NNNN）はFM請求書の管理者名で置き換える
+                setFarms(prev => prev.map(f => f.id === fid && /^牧場\d+$/.test(f.name || "") ? Object.assign({}, f, {name: fname}) : f));
               }
             }
             // ── 実入金（FMの入金額1/2・入金日1/2）を入金管理へ ──
