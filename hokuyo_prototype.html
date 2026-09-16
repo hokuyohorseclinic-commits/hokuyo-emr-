@@ -10226,7 +10226,17 @@ function BillingPage({
       const baMonth0 = (baYear[farmId] && baYear[farmId][m]) ? baYear[farmId][m] : null;
       const baMonth = baMonth0 && (baMonth0.monthly || baMonth0.invoice || baMonth0.carryIn || baMonth0.nextCarry) ? baMonth0 : null;  // 調整額だけの行はFM実績扱いにしない
       if (baMonth) {
-        balance = baMonth.nextCarry || 0;
+        // FMの「来月繰越額」＝請求額−翌月の入金。最終月などで未確定（null）の場合は請求額をそのまま繰越とし、翌月の入金はアプリ側で差し引く
+        const nextY = m === 12 ? y + 1 : y, nextM = m === 12 ? 1 : m + 1;
+        const nextBa = ((ba[nextY] || {})[farmId] || {})[nextM];
+        const nextIsFM = nextBa && (nextBa.monthly || nextBa.invoice || nextBa.carryIn || nextBa.nextCarry);
+        if (baMonth.nextCarry == null) {
+          balance = baMonth.invoice || 0;
+        } else if (nextIsFM) {
+          balance = baMonth.nextCarry || 0;
+        } else {
+          balance = (baMonth.nextCarry || 0) + calcFarmMonthPayments(farmId, nextY, nextM);  // 翌月はアプリ計算に移るので、翌月の入金を二重に引かないよう戻す
+        }
       } else {
         const farm = farms.find(f => f.id === farmId);
         if (farm) {
@@ -10373,8 +10383,8 @@ function BillingPage({
       totals.monthly += fd.monthly;
       totals.invoice += fd.invoice;
       totals.paid += paid;
-      totals.ar += fd.ar;
-      totals.nextCarry += fd.nextCarry;
+      totals.ar += fd.ar || 0;
+      totals.nextCarry += fd.nextCarry || 0;
       totals.carryIn += fd.carryIn;
       totals.adj = (totals.adj||0) + (fd.adj||0);
     });
@@ -15411,7 +15421,7 @@ function App() {
           const removed = cases.filter(c => inRange(c.openDate) && c.type !== "繁殖");
           const kept = cases.filter(c => !(inRange(c.openDate) && c.type !== "繁殖"));
           // ── 繁殖：同じ馬・同じシーズンの既存カルテがあれば、期間内の経過記録だけ入れ替えて残りは引き継ぐ
-          const bKey = (c) => c.horseId + "_" + (c.season || (c.openDate || "").slice(0, 4));
+          const bKey = (c) => c.horseId + "_" + (c.season || (c.openDate || "").slice(0, 4)) + "_" + (c.farmId || "");
           const existingB = {};
           kept.forEach(c => { if (c.type === "繁殖") existingB[bKey(c)] = c; });
           const usedIds = new Set(kept.map(c => c.id));
@@ -15570,8 +15580,8 @@ function App() {
             var monthly = Number(r[colMonthly]) || 0;
             var carryIn = colCarryIn >= 0 ? (Number(r[colCarryIn]) || 0) : 0;
             var invoice = colInvoice >= 0 ? (Number(r[colInvoice]) || 0) : 0;
-            var nextCarry = colNextCarry >= 0 ? (Number(r[colNextCarry]) || 0) : 0;
-            var ar = colAr >= 0 ? (Number(r[colAr]) || 0) : 0;
+            var nextCarry = colNextCarry >= 0 ? (r[colNextCarry] === "" || r[colNextCarry] == null ? null : (Number(r[colNextCarry]) || 0)) : null;
+            var ar = colAr >= 0 ? (r[colAr] === "" || r[colAr] == null ? null : (Number(r[colAr]) || 0)) : null;
             var adj = colAdj >= 0 ? (Number(r[colAdj]) || 0) : 0;
             if (!merged[yr]) merged[yr] = {};
             if (!merged[yr][fid]) merged[yr][fid] = {};
