@@ -12973,7 +12973,8 @@ function DashboardPage({
   horses,
   farms,
   drugsMaster,
-  onOpenCase
+  onOpenCase,
+  onCloseCase
 }) {
   const contCases = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D");
   const todayStr = todayJST();
@@ -13080,22 +13081,25 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), contCases.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, s.sub)))))), /*#__PURE__*/React.createElement("div", {
+    style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }
+  }, /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
-      marginBottom: 16,
+      marginBottom: 0,
       overflow: "hidden"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "12px 16px",
+      padding: "10px 14px",
       borderBottom: "1px solid #f3f4f6",
       fontWeight: 700,
       fontSize: 14,
       background: "#eff6ff",
-      color: "#1e40af"
+      color: "#1e40af",
+      display: "flex", justifyContent: "space-between", alignItems: "center"
     }
-  }, "\uD83D\uDD04 \u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B \u2014 \u672C\u65E5\u306E\u8A3A\u7642\u304C\u5FC5\u8981"), contCases.map(c => {
+  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDD04 \u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B"), /*#__PURE__*/React.createElement("span", { className: "badge badge-blue" }, contCases.length + "\u4EF6")), /*#__PURE__*/React.createElement("div", { style: { maxHeight: 460, overflowY: "auto" } }, contCases.length === 0 && /*#__PURE__*/React.createElement("div", { style: { padding: "20px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 } }, "\u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B\u306F\u3042\u308A\u307E\u305B\u3093"), contCases.map(c => {
     const h = horses.find(x => x.id === c.horseId);
     const f = h ? farms.find(x => x.id === h.farmId) : null;
     const total = calcCaseTotal(c, drugsMaster);
@@ -13103,38 +13107,40 @@ function DashboardPage({
     return /*#__PURE__*/React.createElement("div", {
       key: c.id,
       style: {
-        padding: "10px 16px",
+        padding: "6px 12px",
         borderBottom: "1px solid #f9fafb",
         display: "flex",
         alignItems: "center",
-        gap: 10
+        gap: 8
       }
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "badge badge-blue"
-    }, "\u7D99\u7D9A\u4E2D"), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", {
       style: {
-        flex: 1
+        flex: 1,
+        minWidth: 0
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
-        fontWeight: 600
+        fontWeight: 600,
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
       }
-    }, h?.name), /*#__PURE__*/React.createElement("div", {
+    }, h?.name, /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 6 } }, f?.name)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
-        color: "#6b7280"
+        color: "#6b7280",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
       }
-    }, f?.name, " \xB7 ", c.diagnosis, " \xB7 \u524D\u56DE: ", last?.date, " \xB7 ", c.visits.length, "\u56DE\u76EE")), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: "#6b7280"
-      }
-    }, "\u7D2F\u8A08 \xA5", total.toLocaleString()), /*#__PURE__*/React.createElement("button", {
+    }, c.diagnosis, " \xB7 \u524D\u56DE ", last?.date, " \xB7 ", (c.visits || []).length, "\u56DE \xB7 \xA5", total.toLocaleString())), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-warning btn-sm",
+      style: { whiteSpace: "nowrap" },
       onClick: () => onOpenCase(c)
-    }, "\uD83D\uDCDD \u8A3A\u7642\u8FFD\u52A0"));
-  })), (() => {
+    }, "\uD83D\uDCDD \u8FFD\u52A0"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-secondary btn-sm",
+      title: "\u3053\u306E\u75C7\u4F8B\u3092\u8A3A\u7642\u7D42\u4E86\u306B\u3057\u3066\u4E00\u89A7\u304B\u3089\u5916\u3059",
+      style: { whiteSpace: "nowrap" },
+      onClick: () => { if (onCloseCase && confirm((h?.name || "") + " \u306E\u300C" + (c.diagnosis || "") + "\u300D\u3092\u8A3A\u7642\u7D42\u4E86\u306B\u3057\u3066\u7D99\u7D9A\u4E2D\u304B\u3089\u5916\u3057\u307E\u3059\u304B\uFF1F\n\uFF08\u30AB\u30EB\u30C6\u306F\u6B8B\u308A\u307E\u3059\u3002\u30AB\u30EB\u30C6\u4E00\u89A7\u304B\u3089\u623B\u305B\u307E\u3059\uFF09")) onCloseCase(c); }
+    }, "\u7D42\u4E86"));
+  }))), (() => {
     // ═══ 繁殖スケジュール ═══
     const brCases = cases.filter(c => c.type === "繁殖");
     const today = new Date(); const todayS = today.toISOString().slice(0,10);
@@ -13273,8 +13279,8 @@ function DashboardPage({
     const jutaiCount = brCases.filter(c => c.breedingStatus === "受胎").length;
     const tanefukiCount = brCases.filter(c => c.breedingStatus === "種付中").length;
     const futaijutaiCount = brCases.filter(c => c.breedingStatus === "不受胎").length;
-    return /*#__PURE__*/React.createElement("div", {className:"card", style:{marginBottom:16,overflow:"hidden"}},
-      /*#__PURE__*/React.createElement("div", {style:{padding:"12px 16px",borderBottom:"1px solid #f3f4f6",fontWeight:700,fontSize:14,background:"#fdf2f8",color:"#9d174d",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+    return /*#__PURE__*/React.createElement("div", {className:"card", style:{marginBottom:0,overflow:"hidden"}},
+      /*#__PURE__*/React.createElement("div", {style:{padding:"10px 14px",borderBottom:"1px solid #f3f4f6",fontWeight:700,fontSize:14,background:"#fdf2f8",color:"#9d174d",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}},
         /*#__PURE__*/React.createElement("span", null, "🤱 繁殖スケジュール"),
         /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,fontSize:11}},
           /*#__PURE__*/React.createElement("span", {className:"badge badge-pink"}, "種付中 "+tanefukiCount),
@@ -13283,7 +13289,7 @@ function DashboardPage({
           kanteiSoon.length > 0 && /*#__PURE__*/React.createElement("span", {style:{background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:6,fontWeight:700}}, "⚠ 鑑定時期 "+kanteiSoon.length+"頭")
         )
       ),
-      uniq.length === 0
+      /*#__PURE__*/React.createElement("div", {style:{maxHeight:460,overflowY:"auto"}}, uniq.length === 0
         ? /*#__PURE__*/React.createElement("div", {style:{padding:"20px 16px",textAlign:"center",color:"#9ca3af",fontSize:13}}, "直近の繁殖スケジュールはありません")
         : uniq.slice(0,30).map((s,i) => {
             const dateObj = new Date(s.date+"T00:00:00");
@@ -13291,7 +13297,7 @@ function DashboardPage({
             const wd = ["日","月","火","水","木","金","土"][dateObj.getDay()];
             const isToday = s.date === todayS;
             const isPast = s.date < todayS;
-            return /*#__PURE__*/React.createElement("div", {key:i, style:{padding:"8px 16px",borderBottom:"1px solid #f9fafb",display:"flex",alignItems:"center",gap:10,cursor:"pointer",background:isToday?"#fffbeb":isPast?"#fef2f2":"#fff"}, onClick:()=>onOpenCase(s.c)},
+            return /*#__PURE__*/React.createElement("div", {key:i, style:{padding:"6px 12px",borderBottom:"1px solid #f9fafb",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:isToday?"#fffbeb":isPast?"#fef2f2":"#fff"}, onClick:()=>onOpenCase(s.c)},
               /*#__PURE__*/React.createElement("span", {style:{fontSize:12,fontWeight:700,color:isToday?"#d97706":isPast?"#dc2626":"#374151",minWidth:65}}, mm+"/"+dd+"("+wd+")"),
               /*#__PURE__*/React.createElement("span", {style:{fontSize:11,padding:"2px 8px",borderRadius:6,background:s.type==="妊鑑"?"#fee2e2":s.type==="再鑑定"?"#ede9fe":s.type==="次回"?"#dbeafe":"#f3f4f6",color:s.type==="妊鑑"?"#991b1b":s.type==="再鑑定"?"#5b21b6":s.type==="次回"?"#1e40af":"#374151",fontWeight:600}}, s.type),
               /*#__PURE__*/React.createElement("div", {style:{flex:1}},
@@ -13300,9 +13306,9 @@ function DashboardPage({
               ),
               /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:s.color,fontWeight:600}}, s.detail)
             );
-          })
+          }))
     );
-  })(), /*#__PURE__*/React.createElement("div", {
+  })()), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "2fr 1fr",
@@ -15733,7 +15739,8 @@ function App() {
           horses: horses,
           farms: farms,
           drugsMaster: drugsMaster,
-          onOpenCase: openCase
+          onOpenCase: openCase,
+          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x))
         });
       case "general_new":
         return /*#__PURE__*/React.createElement(GeneralKartePage, {key:"gn"+newGeneralKey,
@@ -16043,7 +16050,8 @@ function App() {
           horses: horses,
           farms: farms,
           drugsMaster: drugsMaster,
-          onOpenCase: openCase
+          onOpenCase: openCase,
+          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x))
         });
     }
   };
