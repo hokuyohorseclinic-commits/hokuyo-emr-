@@ -15478,6 +15478,10 @@ function App() {
           }
           const horseIds = new Set(horses.map(h => h.id));
           const newHorses = (data.horses || []).filter(h => !horseIds.has(h.id));
+          // 既存の馬で名前が空（または牧場未設定）のものは、FM側の馬名・牧場で補完する
+          const fixHorses = {};
+          (data.horses || []).forEach(h => { if (horseIds.has(h.id)) { const ex = horses.find(x => x.id === h.id); if (ex && ((!ex.name && h.name) || (!ex.farmId && h.farmId))) fixHorses[h.id] = h; } });
+          const fixHorseCount = Object.keys(fixHorses).length;
           const farmIds = new Set(farms.map(f => f.id));
           const newFarms = (data.farms || []).filter(f => !farmIds.has(f.id));
           const drugIds = new Set(drugsMaster.map(d => d.id));
@@ -15491,11 +15495,11 @@ function App() {
             "追加/更新: " + newCases.length + "件（" + cnt(newCases) + "）\n" +
             "置換で削除（期間内）: " + removed.length + "件（" + cnt(removed) + "）\n" +
             "繁殖: 既存カルテ更新 " + (replacedB + mergedB) + "頭（期間外の経過記録 " + carried + " 行は引き継ぎ）\n" +
-            "馬マスタ追加: " + newHorses.length + "頭 / 牧場追加: " + newFarms.length + "件 / 薬品追加: " + newDrugs.length + "件 / 繁殖料金追加: " + btAdd.length + "件（料金補正 " + btFix.length + "件）\n\n" +
+            "馬マスタ追加: " + newHorses.length + "頭（名前・牧場の補完 " + fixHorseCount + "頭） / 牧場追加: " + newFarms.length + "件 / 薬品追加: " + newDrugs.length + "件 / 繁殖料金追加: " + btAdd.length + "件（料金補正 " + btFix.length + "件）\n\n" +
             "取り込み前に「データ保存」でバックアップを取ることをお勧めします。実行しますか？";
           if (!confirm(msg)) return;
           if (newFarms.length) setFarms(prev => prev.concat(newFarms.map(f => Object.assign({}, f))));
-          if (newHorses.length) setHorses(prev => prev.concat(newHorses.map(h => Object.assign({}, h))));
+          if (newHorses.length || fixHorseCount) setHorses(prev => prev.map(x => { const f = fixHorses[x.id]; return f ? Object.assign({}, x, { name: x.name || f.name, farmId: x.farmId || f.farmId }) : x; }).concat(newHorses.map(h => Object.assign({}, h))));
           if (newDrugs.length) setDrugsMaster(prev => prev.concat(newDrugs.map(d => Object.assign({}, d))));
           if (btAdd.length || btFix.length) setBreedingTreatments(prev => prev.map(x => { const f = btFix.find(b => b.id === x.id || b.name === x.name); return f ? Object.assign({}, x, { fee: f.fee }) : x; }).concat(btAdd.map(b => Object.assign({}, b))));
           setCases(kept.concat(newCases));
