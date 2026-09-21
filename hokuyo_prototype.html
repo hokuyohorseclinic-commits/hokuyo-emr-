@@ -10282,7 +10282,7 @@ function BillingPage({
   const farmBilling = useMemo(() => {
     const y = Number(billingYear);
     const m = Number(billingMonth);
-    return farms.map(farm => {
+    return farms.filter(farm => (farm.billingCycle || "") !== "請求なし").map(farm => {   // 締日「請求なし」＝請求対象外（自牧場など）
       const period = getPeriod(farm.billingCycle || "末〆");
       const farmHorseIds = new Set(horses.filter(h => h.farmId === farm.id).map(h => h.id));
       const generalCases = cases.filter(c => c.type === "一般" && caseBelongsToFarm(c, farm.id, farmHorseIds) && (c.visits||[]).some(v => visitInPeriod(c, v, period.start, period.end)));
@@ -12055,7 +12055,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.owner || "", onChange: e => setEditFarmData({...editFarmData, owner: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.owner),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.phone || "", onChange: e => setEditFarmData({...editFarmData, phone: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.phone),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.address || "", onChange: e => setEditFarmData({...editFarmData, address: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.address),
-              isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {value: editFarmData.billingCycle || "", onChange: e => setEditFarmData({...editFarmData, billingCycle: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}}, /*#__PURE__*/React.createElement("option", null, ""), /*#__PURE__*/React.createElement("option", null, "20\u65E5\u3006"), /*#__PURE__*/React.createElement("option", null, "\u7267\u5834\u3006"), /*#__PURE__*/React.createElement("option", null, "\u6708\u672B\u3006"))) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, /*#__PURE__*/React.createElement("span", {className: `badge badge-${f.billingCycle === "20\u65E5\u3006" ? "orange" : f.billingCycle === "\u7267\u5834\u3006" ? "purple" : "blue"}`}, f.billingCycle)),
+              isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {value: editFarmData.billingCycle || "", onChange: e => setEditFarmData({...editFarmData, billingCycle: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}}, /*#__PURE__*/React.createElement("option", null, ""), /*#__PURE__*/React.createElement("option", null, "\u672B\u3006"), /*#__PURE__*/React.createElement("option", null, "20\u65E5\u3006"), /*#__PURE__*/React.createElement("option", null, "\u7267\u5834\u3006"), /*#__PURE__*/React.createElement("option", null, "\u8ACB\u6C42\u306A\u3057"))) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, /*#__PURE__*/React.createElement("span", {className: `badge badge-${f.billingCycle === "20\u65E5\u3006" ? "orange" : f.billingCycle === "\u7267\u5834\u3006" ? "purple" : f.billingCycle === "\u8ACB\u6C42\u306A\u3057" ? "gray" : "blue"}`}, f.billingCycle)),
               /*#__PURE__*/React.createElement("td", {style: {whiteSpace: "nowrap"}},
                 isEditing ? [
                   /*#__PURE__*/React.createElement("button", {key: "save", className: "btn btn-success btn-sm", onClick: saveFarm, style: {marginRight: 4}}, "\u4FDD\u5B58"),
@@ -15943,7 +15943,7 @@ function App() {
               const o = prompt("管理者", f.owner);
               const p = prompt("電話", f.phone);
               const a = prompt("住所", f.address);
-              const b = prompt("締日（末〆/20日〆/牧場〆）", f.billingCycle);
+              const b = prompt("締日（末〆/20日〆/牧場〆/請求なし）※「請求なし」は請求対象外（自牧場など）", f.billingCycle);
               setFarms(prev => prev.map(x => x.id === f.id ? {
                 ...x,
                 name: n || f.name,
