@@ -11807,7 +11807,7 @@ function BillingPage({
 }
 
 // ═══════════════ MASTERS ═══════════════
-function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, onEditFarm, onDeleteFarm, onAddHorse, onEditHorse, onDeleteHorse, onAddDrug, onEditDrug, onDeleteDrug, onUpdateDrug, onAddTreatment, onEditTreatment, onDeleteTreatment, breedingTreatments, setBreedingTreatments, purchaseHistory}) {
+function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAddFarm, onEditFarm, onDeleteFarm, onAddHorse, onEditHorse, onDeleteHorse, onAddDrug, onEditDrug, onDeleteDrug, onUpdateDrug, onAddTreatment, onEditTreatment, onDeleteTreatment, breedingTreatments, setBreedingTreatments, purchaseHistory}) {
   const [tab, setTab] = useState("farms");
   const [searchFarm, setSearchFarm] = useState("");
   const [searchHorse, setSearchHorse] = useState("");
@@ -11837,8 +11837,37 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  // ── 利用頻度（カルテから集計）: 各マスターの id → {n: 使用回数, last: 最終使用日} ──
+  const usage = useMemo(() => {
+    const u = {farms: {}, horses: {}, drugs: {}, treatments: {}};
+    const hit = (m, id, date) => { if (id == null || id === "") return; const k = Number(id); const e = m[k] || (m[k] = {n: 0, last: ""}); e.n++; if (date && date > e.last) e.last = date; };
+    const horseFarm = {}; horses.forEach(h => { horseFarm[h.id] = h.farmId; });
+    const tByName = {}; treatmentsMaster.forEach(t => { tByName[t.name] = t.id; });
+    (cases || []).forEach(c => {
+      const d0 = c.openDate || "";
+      hit(u.horses, c.horseId, d0);
+      hit(u.farms, c.farmId || horseFarm[c.horseId], d0);
+      (c.visits || []).forEach(v => {
+        const dv = v.date || d0;
+        (v.drugs || []).forEach(r => hit(u.drugs, r.drugId, dv));
+        (v.treatments || []).forEach(t => hit(u.treatments, (t && t.id != null) ? t.id : tByName[t && t.name], dv));
+      });
+      (c.pharmaItems || []).forEach(pi => hit(u.drugs, pi.drugId, d0));
+    });
+    return u;
+  }, [cases, horses, treatmentsMaster]);
+  const usageMapForTab = {farms: usage.farms, horses: usage.horses, drugs: usage.drugs, treatments: usage.treatments}[tab] || {};
+  const useN = (id) => (usageMapForTab[id] || {}).n || 0;
+  const useLast = (id) => (usageMapForTab[id] || {}).last || "";
+  const useCell = (id) => /*#__PURE__*/React.createElement("td", {style: {textAlign: "right", whiteSpace: "nowrap", fontSize: 11}}, useN(id) > 0 ? [/*#__PURE__*/React.createElement("span", {key: "n", style: {fontWeight: 700, color: "#b45309"}}, useN(id), "回"), /*#__PURE__*/React.createElement("span", {key: "l", style: {color: "#9ca3af", marginLeft: 4, fontSize: 10}}, useLast(id).slice(2))] : /*#__PURE__*/React.createElement("span", {style: {color: "#d1d5db"}}, "—"));
+  const useTh = () => /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("_use"), style: {cursor: "pointer", userSelect: "none", textAlign: "right", whiteSpace: "nowrap"}, title: "カルテでの使用回数（多い順が初期表示）"}, "\u4F7F\u7528", sortKey === "_use" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195"));
+
   const sortData = (data, key, dir) => {
-    if (!key) return data;
+    if (!key || key === "_use") {
+      // 初期表示・「使用」列: 利用頻度の多い順（同数は名前順）。"_use" 昇順は少ない順
+      const asc = key === "_use" && dir === "asc";
+      return [...data].sort((a, b) => ((useN(b.id) - useN(a.id)) * (asc ? -1 : 1)) || String(a.name || "").localeCompare(String(b.name || ""), "ja"));
+    }
     return [...data].sort((a, b) => {
       let va = a[key], vb = b[key];
       if (typeof va === "string") va = va.toLowerCase();
@@ -11949,7 +11978,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
       /*#__PURE__*/React.createElement("table", null,
         /*#__PURE__*/React.createElement("thead", null,
           /*#__PURE__*/React.createElement("tr", {style: {background: "#f9fafb"}},
-            /*#__PURE__*/React.createElement("th", null, "ID"),
+            /*#__PURE__*/React.createElement("th", null, "ID"), useTh(),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("name"), style: {cursor: "pointer", userSelect: "none"}}, "\u7267\u5834\u540D", sortKey === "name" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("owner"), style: {cursor: "pointer", userSelect: "none"}}, "\u7BA1\u7406\u8005", sortKey === "owner" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", null, "\u96FB\u8A71"),
@@ -11962,7 +11991,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
           sortData(filteredFarms, sortKey, sortDir).map(f => {
             const isEditing = editingFarmId === f.id;
             return /*#__PURE__*/React.createElement("tr", {key: f.id, style: {background: isEditing ? "#fef3c7" : f.archived ? "#f3f4f6" : ""}},
-              /*#__PURE__*/React.createElement("td", {style: {color: "#9ca3af", fontSize: 11}}, f.id),
+              /*#__PURE__*/React.createElement("td", {style: {color: "#9ca3af", fontSize: 11}}, f.id), useCell(f.id),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.name || "", onChange: e => setEditFarmData({...editFarmData, name: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {fontWeight: 600, cursor: "pointer", opacity: f.archived ? 0.6 : 1}}, f.archived && /*#__PURE__*/React.createElement("span", {className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "\u30A2\u30FC\u30AB\u30A4\u30D6\u6E08"), f.name),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.owner || "", onChange: e => setEditFarmData({...editFarmData, owner: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.owner),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.phone || "", onChange: e => setEditFarmData({...editFarmData, phone: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.phone),
@@ -12001,7 +12030,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
       /*#__PURE__*/React.createElement("table", null,
         /*#__PURE__*/React.createElement("thead", null,
           /*#__PURE__*/React.createElement("tr", {style: {background: "#f9fafb"}},
-            /*#__PURE__*/React.createElement("th", null, "ID"),
+            /*#__PURE__*/React.createElement("th", null, "ID"), useTh(),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("name"), style: {cursor: "pointer", userSelect: "none"}}, "\u99AC\u540D", sortKey === "name" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("farmName"), style: {cursor: "pointer", userSelect: "none"}}, "\u7267\u5834", sortKey === "farmName" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("breed"), style: {cursor: "pointer", userSelect: "none"}}, "\u54C1\u7A2E", sortKey === "breed" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
@@ -12019,7 +12048,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
             const isEditing = editingHorseId === h.id;
             const editInpStyle = {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11};
             return /*#__PURE__*/React.createElement("tr", {key: h.id, style: {background: isEditing ? "#fef3c7" : h.archived ? "#f3f4f6" : ""}},
-              /*#__PURE__*/React.createElement("td", {style: {color: "#9ca3af", fontSize: 11}}, h.id),
+              /*#__PURE__*/React.createElement("td", {style: {color: "#9ca3af", fontSize: 11}}, h.id), useCell(h.id),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editHorseData.name || "", onChange: e => setEditHorseData({...editHorseData, name: e.target.value}), style: {...editInpStyle, fontWeight: 600}})) : /*#__PURE__*/React.createElement("td", {style: {fontWeight: 600, cursor: "pointer", opacity: h.archived ? 0.6 : 1}}, h.archived && /*#__PURE__*/React.createElement("span", {className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "\u30A2\u30FC\u30AB\u30A4\u30D6\u6E08"), h.name),
               /*#__PURE__*/React.createElement("td", {style: {color: "#2563eb", cursor: "pointer"}, onDoubleClick: () => startEditHorse(h)}, f?.name),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editHorseData.breed || "", onChange: e => setEditHorseData({...editHorseData, breed: e.target.value}), style: editInpStyle})) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditHorse(h)}, h.breed),
@@ -12079,12 +12108,12 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
       E("div", {className: "card", style: {overflow: "auto", maxHeight: "65vh"}},
         E("table", null,
           E("thead", null, E("tr", {style: {background: "#f9fafb"}},
-            th("薬品名", "name"), th("区分", "category"), th("請求単位", "unit"), th("単価(税抜)", "pricePerUnit", true), th("よく使う", "active"), th("既定数量", "defaultDose", true), th("操作"))),
+            useTh(), th("薬品名", "name"), th("区分", "category"), th("請求単位", "unit"), th("単価(税抜)", "pricePerUnit", true), th("よく使う", "active"), th("既定数量", "defaultDose", true), th("操作"))),
           E("tbody", null, sortData(filteredDrugs, sortKey, sortDir).map(function(d){
             var isEditing = editingDrugId === d.id;
             var hasStock = isDrugLinkedToPurchase(d);
             var cellInp = function(field, type, extra){ return E("input", Object.assign({type: type || "text", value: editDrugData[field] == null ? "" : editDrugData[field], onChange: function(e){ var v = e.target.value; setEditDrugData(Object.assign({}, editDrugData, ((field === "pricePerUnit" || field === "defaultDose") ? {[field]: Number(v) || 0} : {[field]: v}))); }, onKeyDown: function(e){ if (e.key === "Enter") saveDrug(); if (e.key === "Escape") cancelEditDrug(); }, style: Object.assign({width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: 4, fontSize: 11}, extra || {})})); };
-            return E("tr", {key: d.id, style: {background: isEditing ? "#fef3c7" : d.archived ? "#f3f4f6" : hasStock ? "#f0fdf4" : "", borderLeft: hasStock ? "3px solid #22c55e" : "", opacity: d.archived ? 0.7 : 1}},
+            return E("tr", {key: d.id, style: {background: isEditing ? "#fef3c7" : d.archived ? "#f3f4f6" : hasStock ? "#f0fdf4" : "", borderLeft: hasStock ? "3px solid #22c55e" : "", opacity: d.archived ? 0.7 : 1}}, useCell(d.id),
               E("td", {style: {fontWeight: 600, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer"}, onDoubleClick: function(){ startEditDrug(d); }},
                 isEditing ? cellInp("name", "text", {fontWeight: 600}) : [d.archived && E("span", {key: "a", className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "アーカイブ済"), d.name, d.isImport && E("span", {key: "i", className: "badge badge-yellow", style: {fontSize: 9, marginLeft: 4}}, "輸入")]),
               E("td", null, E("select", {value: d.category || "", onChange: function(e){ onUpdateDrug(d.id, {category: e.target.value}); }, style: {fontSize: 11, padding: "2px 4px", border: "1px solid #e5e7eb", borderRadius: 4, background: "#f9fafb", cursor: "pointer", minHeight: 28, WebkitAppearance: "menulist"}},
@@ -12138,7 +12167,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
     /*#__PURE__*/React.createElement("div", {className: "card", style: {overflow: "auto", maxHeight: "65vh"}},
       /*#__PURE__*/React.createElement("table", null,
         /*#__PURE__*/React.createElement("thead", null,
-          /*#__PURE__*/React.createElement("tr", {style: {background: "#f9fafb"}},
+          /*#__PURE__*/React.createElement("tr", {style: {background: "#f9fafb"}}, useTh(),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("name"), style: {cursor: "pointer", userSelect: "none"}}, "\u51E6\u7F6E\u540D", sortKey === "name" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("priority"), style: {cursor: "pointer", userSelect: "none"}}, "\u512A\u5148\u5EA6", sortKey === "priority" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
             /*#__PURE__*/React.createElement("th", {onClick: () => toggleSort("points"), style: {cursor: "pointer", userSelect: "none"}}, "\u70B9\u6570", sortKey === "points" ? /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4}}, sortDir === "asc" ? "\u25B2" : "\u25BC") : /*#__PURE__*/React.createElement("span", {style: {fontSize: 10, marginLeft: 4, color: "#d1d5db"}}, "\u2195")),
@@ -12149,7 +12178,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, onAddFarm, o
         /*#__PURE__*/React.createElement("tbody", null,
           sortData(filteredTreatments, sortKey, sortDir).map(t => {
             const isEditing = editingTreatmentId === t.id;
-            return /*#__PURE__*/React.createElement("tr", {key: t.id, style: {background: isEditing ? "#fef3c7" : t.archived ? "#f3f4f6" : ""}},
+            return /*#__PURE__*/React.createElement("tr", {key: t.id, style: {background: isEditing ? "#fef3c7" : t.archived ? "#f3f4f6" : ""}}, useCell(t.id),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editTreatmentData.name || "", onChange: e => setEditTreatmentData({...editTreatmentData, name: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontWeight: 600}})) : /*#__PURE__*/React.createElement("td", {style: {fontWeight: 600, cursor: "pointer", opacity: t.archived ? 0.6 : 1}}, t.archived && /*#__PURE__*/React.createElement("span", {className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "\u30A2\u30FC\u30AB\u30A4\u30D6\u6E08"), t.name),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {value: editTreatmentData.priority || "", onChange: e => setEditTreatmentData({...editTreatmentData, priority: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}}, /*#__PURE__*/React.createElement("option", null, ""), /*#__PURE__*/React.createElement("option", null, "\u9ad8"), /*#__PURE__*/React.createElement("option", null, "\u4e2d"), /*#__PURE__*/React.createElement("option", null, "\u4f4e"))) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditTreatment(t)}, /*#__PURE__*/React.createElement("span", {className: `badge badge-${t.priority === "\u9ad8" ? "red" : t.priority === "\u4e2d" ? "orange" : t.priority === "\u4f4e" ? "gray" : "yellow"}`}, t.priority || "\u2014")),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {type: "number", value: editTreatmentData.points || "", onChange: e => setEditTreatmentData({...editTreatmentData, points: parseInt(e.target.value) || 0}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditTreatment(t)}, t.points, "\u70B9"),
@@ -15826,6 +15855,7 @@ function App() {
         return /*#__PURE__*/React.createElement(MastersPage, {
           farms: farms,
           horses: horses,
+          cases: cases,
           drugsMaster: drugsMaster,
           treatmentsMaster: treatmentsMaster,
           purchaseHistory: purchaseHistory,
