@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>音声カルテ - 北洋ホースクリニック</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="音声カルテ">
+<style>
+*{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;box-sizing:border-box;margin:0;padding:0}
+body{background:#f0f2f5;min-height:100vh;color:#1a1a1a}
+.app{max-width:600px;margin:0 auto;padding:12px;padding-bottom:100px}
+
+/* ヘッダー */
+.header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#1e293b;color:#fff;border-radius:12px;margin-bottom:12px}
+.header h1{font-size:16px;font-weight:700}
+.header .subtitle{font-size:11px;color:#94a3b8;margin-top:2px}
+.header-right{display:flex;align-items:center;gap:8px}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:#ef4444}
+.sync-dot.online{background:#22c55e}
+.link-btn{background:none;border:none;color:#60a5fa;font-size:12px;cursor:pointer;text-decoration:underline}
+
+/* 獣医選択 */
+.vet-bar{display:flex;gap:8px;margin-bottom:12px;padding:0 4px}
+.vet-btn{flex:1;padding:10px;border-radius:10px;border:2px solid #d1d5db;background:#fff;font-size:14px;font-weight:600;cursor:pointer;text-align:center;transition:all .2s}
+.vet-btn.active{border-color:#2563eb;background:#eff6ff;color:#2563eb}
+
+/* 音声入力エリア */
+.voice-panel{background:#fff;border-radius:16px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center}
+.mic-btn{width:80px;height:80px;border-radius:50%;border:none;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;font-size:32px;cursor:pointer;transition:all .3s;box-shadow:0 4px 15px rgba(37,99,235,.3);display:inline-flex;align-items:center;justify-content:center}
+.mic-btn:active{transform:scale(.95)}
+.mic-btn.recording{background:linear-gradient(135deg,#dc2626,#b91c1c);animation:pulse-ring 1.5s ease-out infinite;box-shadow:0 4px 20px rgba(220,38,38,.4)}
+@keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(220,38,38,.4)}70%{box-shadow:0 0 0 15px rgba(220,38,38,0)}100%{box-shadow:0 0 0 0 rgba(220,38,38,0)}}
+.mic-label{margin-top:10px;font-size:13px;color:#6b7280}
+.mic-label.recording{color:#dc2626;font-weight:600}
+
+/* テキスト入力（代替） */
+.text-input-area{margin-top:14px;display:flex;gap:8px}
+.text-input-area input{flex:1;padding:10px 14px;border:1px solid #d1d5db;border-radius:10px;font-size:15px}
+.text-input-area button{padding:10px 16px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+
+/* 認識テキスト表示 */
+.transcript-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-top:14px;min-height:50px;font-size:14px;line-height:1.6;text-align:left;color:#334155;white-space:pre-wrap;display:none}
+.transcript-box.visible{display:block}
+.transcript-box .interim{color:#94a3b8}
+
+/* 解析結果カード */
+.result-card{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);display:none}
+.result-card.visible{display:block}
+.result-card h3{font-size:14px;color:#2563eb;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.field-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.field-label{font-size:12px;font-weight:600;color:#6b7280;min-width:56px;flex-shrink:0}
+.field-input{flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}
+.field-select{flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff;-webkit-appearance:menulist}
+.field-input:focus,.field-select:focus{outline:none;box-shadow:0 0 0 2px #3b82f6}
+
+/* チップ（処置・薬品選択） */
+.chips-area{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.chip{padding:6px 12px;border-radius:20px;font-size:12px;border:1px solid #d1d5db;cursor:pointer;background:#fff;transition:all .2s;white-space:nowrap}
+.chip.selected{background:#2563eb;color:#fff;border-color:#2563eb}
+.chip.selected:active{background:#1d4ed8}
+
+/* 処置追加エリア */
+.treatment-list{margin-top:8px}
+.treatment-item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
+.treatment-item .t-name{flex:1}
+.treatment-item .t-fee{color:#2563eb;font-weight:600;min-width:70px;text-align:right}
+.treatment-item .t-remove{background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:2px 6px}
+
+/* 薬品追加 */
+.drug-item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
+.drug-item .d-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drug-item .d-dose{width:50px;padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;text-align:center}
+.drug-item .d-unit{font-size:11px;color:#6b7280;min-width:20px}
+.drug-item .d-price{color:#2563eb;font-weight:600;min-width:60px;text-align:right;font-size:12px}
+.drug-item .d-remove{background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:2px 6px}
+
+/* 合計 */
+.total-bar{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#f0f9ff;border-radius:10px;margin-top:12px}
+.total-bar .label{font-size:13px;color:#6b7280}
+.total-bar .amount{font-size:20px;font-weight:700;color:#1e40af}
+
+/* アクションボタン */
+.action-bar{display:flex;gap:8px;margin-top:12px}
+.action-btn{flex:1;padding:14px;border-radius:12px;border:none;font-size:15px;font-weight:700;cursor:pointer;transition:all .2s}
+.action-btn:active{transform:scale(.97)}
+.btn-save{background:#2563eb;color:#fff}
+.btn-save:disabled{background:#93c5fd;cursor:not-allowed}
+.btn-clear{background:#f3f4f6;color:#6b7280}
+.btn-add-visit{background:#16a34a;color:#fff}
+
+/* 今日の履歴 */
+.history-panel{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.history-panel h3{font-size:14px;color:#374151;margin-bottom:10px}
+.hist-entry{padding:10px 12px;background:#f8fafc;border-radius:10px;margin-bottom:8px;border-left:3px solid #2563eb;font-size:13px}
+.hist-entry .h-time{font-size:11px;color:#94a3b8}
+.hist-entry .h-farm{font-weight:600;color:#1e293b}
+.hist-entry .h-horse{color:#2563eb}
+.hist-entry .h-detail{color:#6b7280;margin-top:2px}
+.hist-entry .h-total{font-weight:700;color:#1e40af;float:right}
+
+/* 処置クイック追加 */
+.quick-add{margin-top:8px}
+.quick-add summary{font-size:12px;color:#6b7280;cursor:pointer;margin-bottom:6px}
+.search-box{width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:6px}
+
+/* トースト */
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.success{background:#16a34a;color:#fff}
+.toast.error{background:#dc2626;color:#fff}
+.toast.show{opacity:1}
+
+/* レスポンシブ */
+@media(min-width:768px){
+  .app{padding:20px}
+  .mic-btn{width:100px;height:100px;font-size:40px}
+  .field-input,.field-select{font-size:15px}
+}
+</style>
+</head>
+<body>
+<!-- ═══ ログイン画面 ═══ -->
+<div id="loginOverlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(135deg,#1e293b,#0f172a);display:flex;align-items:center;justify-content:center;z-index:99999">
+  <div style="background:#fff;border-radius:20px;padding:36px;width:340px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center">
+    <div style="font-size:28px;margin-bottom:8px">🎤</div>
+    <h2 style="font-size:18px;font-weight:700;color:#1e293b;margin-bottom:4px">北洋ホースクリニック</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:24px">音声カルテ入力</p>
+    <input type="email" id="loginEmail" placeholder="メールアドレス" style="width:100%;padding:12px 16px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;margin-bottom:10px;box-sizing:border-box" />
+    <input type="password" id="loginPassword" placeholder="パスワード" style="width:100%;padding:12px 16px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;margin-bottom:16px;box-sizing:border-box" onkeydown="if(event.key==='Enter')doLogin()" />
+    <button onclick="doLogin()" style="width:100%;padding:14px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer">ログイン</button>
+    <div id="loginError" style="color:#dc2626;font-size:13px;margin-top:10px;min-height:20px"></div>
+  </div>
+</div>
+
+<div class="app" id="app" style="display:none">
+  <!-- ヘッダー -->
+  <div class="header">
+    <div>
+      <h1>音声カルテ入力</h1>
+      <div class="subtitle">北洋ホースクリニック</div>
+    </div>
+    <div class="header-right">
+      <span class="sync-dot" id="syncDot"></span>
+      <a class="link-btn" href="./index.html">本体EMR</a>
+      <button class="link-btn" onclick="doLogout()" style="color:#f87171">ログアウト</button>
+    </div>
+  </div>
+
+  <!-- 獣医選択 -->
+  <div class="vet-bar">
+    <button class="vet-btn active" onclick="selectVet('佐藤')" id="vet_sato">佐藤</button>
+    <button class="vet-btn" onclick="selectVet('せき')" id="vet_seki">せき</button>
+  </div>
+
+  <!-- 音声入力パネル -->
+  <div class="voice-panel">
+    <button class="mic-btn" id="micBtn" onclick="toggleRecording()">🎤</button>
+    <div class="mic-label" id="micLabel">タップして話す</div>
+    <div class="text-input-area">
+      <input type="text" id="manualInput" placeholder="テキスト入力も可能..." />
+      <button onclick="processManualInput()">解析</button>
+    </div>
+    <div class="transcript-box" id="transcriptBox"></div>
+  </div>
+
+  <!-- 解析結果フォーム -->
+  <div class="result-card" id="resultCard">
+    <h3>📋 解析結果</h3>
+
+    <div class="field-row">
+      <span class="field-label">📅 日付</span>
+      <input type="date" class="field-input" id="r_date" />
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">🏠 牧場</span>
+      <select class="field-select" id="r_farm" onchange="onFarmChange()">
+        <option value="">選択してください</option>
+      </select>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">🐴 馬名</span>
+      <select class="field-select" id="r_horse">
+        <option value="">選択してください</option>
+      </select>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">🔍 診断</span>
+      <input type="text" class="field-input" id="r_diagnosis" list="diagnosisList" />
+      <datalist id="diagnosisList"></datalist>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">📝 種別</span>
+      <select class="field-select" id="r_visitType">
+        <option value="初診">初診</option>
+        <option value="再診">再診</option>
+      </select>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">🚗 距離</span>
+      <input type="number" class="field-input" id="r_km" placeholder="km" style="max-width:100px" />
+      <span style="font-size:12px;color:#6b7280" id="r_km_fee"></span>
+    </div>
+
+    <!-- 処置 -->
+    <div style="margin-top:12px">
+      <span class="field-label">💉 処置</span>
+      <div class="treatment-list" id="treatmentList"></div>
+      <details class="quick-add">
+        <summary>＋ 処置を追加</summary>
+        <input type="text" class="search-box" id="treatSearch" placeholder="処置名で検索..." oninput="renderTreatmentChips()" />
+        <div class="chips-area" id="treatChips"></div>
+      </details>
+    </div>
+
+    <!-- 投薬 -->
+    <div style="margin-top:12px">
+      <span class="field-label">💊 投薬</span>
+      <div id="drugList"></div>
+      <details class="quick-add">
+        <summary>＋ 薬品を追加</summary>
+        <input type="text" class="search-box" id="drugSearch" placeholder="薬品名で検索..." oninput="renderDrugChips()" />
+        <div class="chips-area" id="drugChips"></div>
+      </details>
+    </div>
+
+    <!-- 調整額 -->
+    <div class="field-row" style="margin-top:12px">
+      <span class="field-label">調整額</span>
+      <input type="number" class="field-input" id="r_adjust" value="0" style="max-width:100px" oninput="updateTotal()" />
+    </div>
+
+    <!-- 合計 -->
+    <div class="total-bar">
+      <span class="label">合計金額</span>
+      <span class="amount" id="totalAmount">¥0</span>
+    </div>
+
+    <!-- アクションボタン -->
+    <div class="action-bar">
+      <button class="action-btn btn-clear" onclick="clearForm()">クリア</button>
+      <button class="action-btn btn-save" id="saveBtn" onclick="saveCase()">保存</button>
+    </div>
+  </div>
+
+  <!-- 今日の入力履歴 -->
+  <div class="history-panel" id="historyPanel">
+    <h3>📝 今日の入力 <span id="histCount" style="font-size:12px;color:#94a3b8"></span></h3>
+    <div id="historyList"><div style="color:#94a3b8;font-size:13px">まだ入力がありません</div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
+<script>
+// ═══════════════════════════════════════════
+// 音声カルテ入力システム — 北洋ホースクリニック
+// ═══════════════════════════════════════════
+
+// ─── Firebase設定（EMRアプリと同じ）───
+var firebaseConfig = {
+  apiKey: "AIzaSyCpBn2haBU1zEIepTpCwF8KeL5v_2_Lnzc",
+  authDomain: "hokuyo-emr.firebaseapp.com",
+  projectId: "hokuyo-emr",
+  storageBucket: "hokuyo-emr.firebasestorage.app",
+  messagingSenderId: "687686923750",
+  appId: "1:687686923750:web:34853b887e5873f7fe9227"
+};
+
+var SYNC_COLLECTION = "clinicData";
+var db = null;
+var FIREBASE_READY = false;
+
+// ─── 認証 ───
+function doLogin() {
+  var email = document.getElementById("loginEmail").value.trim();
+  var pwd = document.getElementById("loginPassword").value;
+  var errEl = document.getElementById("loginError");
+  errEl.textContent = "";
+  if (!email || !pwd) { errEl.textContent = "メールアドレスとパスワードを入力してください"; return; }
+  firebase.auth().signInWithEmailAndPassword(email, pwd)
+    .then(function() { errEl.textContent = ""; })
+    .catch(function(err) {
+      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        errEl.textContent = "メールアドレスまたはパスワードが違います";
+      } else if (err.code === "auth/invalid-email") {
+        errEl.textContent = "メールアドレスの形式が正しくありません";
+      } else {
+        errEl.textContent = "ログインに失敗しました (" + err.code + ")";
+      }
+    });
+}
+function doLogout() {
+  if (confirm("ログアウトしますか？")) firebase.auth().signOut();
+}
+
+// ─── マスターデータ ───
+var FARMS = [];
+var HORSES = [];
+var TREATMENTS = [];
+var DRUGS = [];
+var CASES = [];
+var CURRENT_VET = "佐藤";
+
+// ─── 処置の略称マッピング ───
+var TREATMENT_ALIASES = {
+  "筋注": "筋肉注射",
+  "静注": "静脈注射",
+  "点滴": "点滴注射",
+  "エコー": "エコー処置",
+  "腱エコー": "腱エコー検査",
+  "胸部エコー": "胸部エコー検査",
+  "腹部エコー": "腹部エコー検査",
+  "レントゲン": "レントゲン検査",
+  "採血": "採血",
+  "採材": "採材",
+  "直検": "直検処置",
+  "直腸検査": "直腸検査",
+  "去勢": "去勢処置",
+  "整歯": "整歯処置",
+  "抜歯": "抜歯処置",
+  "内視鏡": "内視鏡検査",
+  "経鼻": "経鼻処置",
+  "妊鑑": "妊娠鑑定",
+  "妊娠鑑定": "妊娠鑑定",
+  "レーザー": "レーザー処置",
+  "導尿": "導尿処置",
+  "点眼": "点眼処置",
+  "局麻": "局所麻酔処置",
+  "安楽死": "安楽死処置",
+  "マイクロチップ": "マイクロチップ埋め込み"
+};
+
+var COMMON_DIAGNOSES = ["関節周囲炎","感冒","疝痛","骨折","蹄葉炎","腱炎","裂蹄","蹄叉腐爛","ロタ予防接種","輸送熱予防","フォールチェック","子宮炎","難産","肌荒","尿道閉塞","血液検査","レントゲン検査","精液検査","腸閉塞","肺炎","馬インフルエンザ","破傷風","疲労骨折","挫跖","球節炎","飛節炎","背腰痛","筋肉痛","創傷","皮膚炎","結膜炎","角膜潰瘍","胃潰瘍","妊娠鑑定","ワクチン接種","予防接種","直腸検査","定期検診"];
+
+// ─── 選択中の処置・薬品 ───
+var selectedTreatments = []; // [{name, points, fee}]
+var selectedDrugs = [];      // [{name, dose, unit, price, drugId}]
+var todayHistory = [];        // 今日の入力履歴
+
+// ─── デバイスID ───
+var deviceId = (function() {
+  var id = localStorage.getItem("voice_device_id");
+  if (!id) {
+    id = "voice_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6);
+    localStorage.setItem("voice_device_id", id);
+  }
+  return id;
+})();
+
+// ═══════════════════════════════════════════
+// Firebase初期化・データロード
+// ═══════════════════════════════════════════
+
+function initFirebase() {
+  try {
+    var app = firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    var persistOptions = isIOS ? {} : { synchronizeTabs: true };
+    db.enablePersistence(persistOptions).catch(function(e) {
+      console.warn("[Firebase] 永続化エラー:", e.code);
+    });
+    FIREBASE_READY = true;
+    document.getElementById("syncDot").classList.add("online");
+    console.log("[Voice] Firebase初期化成功");
+
+    // 認証状態リスナー
+    firebase.auth().onAuthStateChanged(function(user) {
+      if (user) {
+        console.log("[Auth] ログイン:", user.email);
+        document.getElementById("loginOverlay").style.display = "none";
+        document.getElementById("app").style.display = "block";
+        loadMasterData();
+      } else {
+        console.log("[Auth] 未認証");
+        document.getElementById("loginOverlay").style.display = "flex";
+        document.getElementById("app").style.display = "none";
+      }
+    });
+  } catch(e) {
+    console.error("[Voice] Firebase初期化失敗:", e);
+    showToast("Firebase接続エラー", "error");
+    // ローカルキャッシュから読む
+    loadFromCache();
+  }
+}
+
+function loadMasterData() {
+  var loaded = 0;
+  var total = 4; // farms, horses, treatmentsMaster, drugsMaster
+
+  function checkDone() {
+    loaded++;
+    if (loaded >= total) {
+      console.log("[Voice] マスターデータ読み込み完了: 牧場=" + FARMS.length + " 馬=" + HORSES.length + " 処置=" + TREATMENTS.length + " 薬品=" + DRUGS.length);
+      cacheMasterData();
+      populateSelects();
+      loadTodayHistory();
+    }
+  }
+
+  // 牧場
+  db.collection(SYNC_COLLECTION).doc("farms").get().then(function(snap) {
+    if (snap.exists && snap.data().data) FARMS = snap.data().data;
+    checkDone();
+  }).catch(function() { loadCachedField("farms"); checkDone(); });
+
+  // 馬
+  db.collection(SYNC_COLLECTION).doc("horses").get().then(function(snap) {
+    if (snap.exists && snap.data().data) HORSES = snap.data().data;
+    checkDone();
+  }).catch(function() { loadCachedField("horses"); checkDone(); });
+
+  // 処置マスター
+  db.collection(SYNC_COLLECTION).doc("treatmentsMaster").get().then(function(snap) {
+    if (snap.exists && snap.data().data) TREATMENTS = snap.data().data;
+    checkDone();
+  }).catch(function() { loadCachedField("treatments"); checkDone(); });
+
+  // 薬品マスター
+  db.collection(SYNC_COLLECTION).doc("drugsMaster").get().then(function(snap) {
+    if (snap.exists && snap.data().data) DRUGS = snap.data().data;
+    checkDone();
+  }).catch(function() { loadCachedField("drugs"); checkDone(); });
+}
+
+function cacheMasterData() {
+  try {
+    localStorage.setItem("voice_cache", JSON.stringify({
+      farms: FARMS, horses: HORSES, treatments: TREATMENTS, drugs: DRUGS, ts: Date.now()
+    }));
+  } catch(e) {}
+}
+
+function loadFromCache() {
+  try {
+    var c = JSON.parse(localStorage.getItem("voice_cache") || "{}");
+    if (c.farms) FARMS = c.farms;
+    if (c.horses) HORSES = c.horses;
+    if (c.treatments) TREATMENTS = c.treatments;
+    if (c.drugs) DRUGS = c.drugs;
+    populateSelects();
+  } catch(e) {}
+}
+
+function loadCachedField(field) {
+  try {
+    var c = JSON.parse(localStorage.getItem("voice_cache") || "{}");
+    if (field === "farms" && c.farms) FARMS = c.farms;
+    if (field === "horses" && c.horses) HORSES = c.horses;
+    if (field === "treatments" && c.treatments) TREATMENTS = c.treatments;
+    if (field === "drugs" && c.drugs) DRUGS = c.drugs;
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════
+// UI初期化
+// ═══════════════════════════════════════════
+
+function populateSelects() {
+  // 牧場セレクト
+  var farmSel = document.getElementById("r_farm");
+  farmSel.innerHTML = '<option value="">選択してください</option>';
+  FARMS.sort(function(a,b) { return (a.name || "").localeCompare(b.name || ""); }).forEach(function(f) {
+    var opt = document.createElement("option");
+    opt.value = f.id;
+    opt.textContent = f.name;
+    farmSel.appendChild(opt);
+  });
+
+  // 診断datalist
+  var dl = document.getElementById("diagnosisList");
+  dl.innerHTML = "";
+  COMMON_DIAGNOSES.forEach(function(d) {
+    var opt = document.createElement("option");
+    opt.value = d;
+    dl.appendChild(opt);
+  });
+
+  // 今日の日付
+  document.getElementById("r_date").value = new Date().toISOString().split("T")[0];
+
+  // 距離変更で料金表示
+  document.getElementById("r_km").addEventListener("input", function() {
+    var km = Number(this.value) || 0;
+    document.getElementById("r_km_fee").textContent = km > 0 ? "(¥" + (km * 80).toLocaleString() + ")" : "";
+    updateTotal();
+  });
+}
+
+function onFarmChange() {
+  var farmId = Number(document.getElementById("r_farm").value);
+  var horseSel = document.getElementById("r_horse");
+  horseSel.innerHTML = '<option value="">選択してください</option>';
+
+  if (!farmId) return;
+
+  var farmHorses = HORSES.filter(function(h) { return h.farmId === farmId; });
+  farmHorses.sort(function(a,b) { return (a.name || "").localeCompare(b.name || ""); });
+  farmHorses.forEach(function(h) {
+    var opt = document.createElement("option");
+    opt.value = h.id;
+    opt.textContent = h.name;
+    horseSel.appendChild(opt);
+  });
+}
+
+function selectVet(name) {
+  CURRENT_VET = name;
+  document.querySelectorAll(".vet-btn").forEach(function(b) { b.classList.remove("active"); });
+  if (name === "佐藤") document.getElementById("vet_sato").classList.add("active");
+  else document.getElementById("vet_seki").classList.add("active");
+}
+
+// ═══════════════════════════════════════════
+// Web Speech API — 音声認識
+// ═══════════════════════════════════════════
+
+var recognition = null;
+var isRecording = false;
+var finalTranscript = "";
+var interimTranscript = "";
+
+function initSpeechRecognition() {
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    console.warn("[Voice] Web Speech API非対応ブラウザ");
+    document.getElementById("micLabel").textContent = "音声入力非対応（テキスト入力をご利用ください）";
+    document.getElementById("micBtn").style.opacity = "0.5";
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = "ja-JP";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = function() {
+    isRecording = true;
+    document.getElementById("micBtn").classList.add("recording");
+    document.getElementById("micLabel").textContent = "聞いています...";
+    document.getElementById("micLabel").classList.add("recording");
+    document.getElementById("transcriptBox").classList.add("visible");
+    finalTranscript = "";
+    interimTranscript = "";
+  };
+
+  recognition.onresult = function(event) {
+    interimTranscript = "";
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript;
+      } else {
+        interimTranscript += event.results[i][0].transcript;
+      }
+    }
+    var box = document.getElementById("transcriptBox");
+    box.innerHTML = finalTranscript + '<span class="interim">' + interimTranscript + '</span>';
+  };
+
+  recognition.onerror = function(event) {
+    console.error("[Voice] 音声認識エラー:", event.error);
+    if (event.error === "not-allowed") {
+      showToast("マイクの使用を許可してください", "error");
+    }
+    stopRecording();
+  };
+
+  recognition.onend = function() {
+    if (isRecording) {
+      // iOS Safariでは自動停止するので再開
+      try { recognition.start(); } catch(e) {
+        stopRecording();
+        if (finalTranscript.trim()) {
+          parseTranscript(finalTranscript.trim());
+        }
+      }
+    }
+  };
+}
+
+function toggleRecording() {
+  if (!recognition) {
+    showToast("音声入力非対応のブラウザです", "error");
+    return;
+  }
+  if (isRecording) {
+    stopRecording();
+    if (finalTranscript.trim()) {
+      parseTranscript(finalTranscript.trim());
+    }
+  } else {
+    try {
+      recognition.start();
+    } catch(e) {
+      console.error("[Voice] 開始エラー:", e);
+    }
+  }
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (recognition) {
+    try { recognition.stop(); } catch(e) {}
+  }
+  document.getElementById("micBtn").classList.remove("recording");
+  document.getElementById("micLabel").textContent = "タップして話す";
+  document.getElementById("micLabel").classList.remove("recording");
+}
+
+function processManualInput() {
+  var input = document.getElementById("manualInput");
+  var text = input.value.trim();
+  if (!text) return;
+
+  var box = document.getElementById("transcriptBox");
+  box.textContent = text;
+  box.classList.add("visible");
+
+  parseTranscript(text);
+  input.value = "";
+}
+
+// ═══════════════════════════════════════════
+// テキスト解析エンジン
+// ═══════════════════════════════════════════
+
+function parseTranscript(text) {
+  console.log("[Parse] 入力テキスト:", text);
+
+  var result = {
+    farm: null,
+    horse: null,
+    diagnosis: "",
+    treatments: [],
+    drugs: [],
+    km: null,
+    vet: CURRENT_VET
+  };
+
+  // 1. 牧場を検出
+  result.farm = detectFarm(text);
+
+  // 2. 馬を検出
+  result.horse = detectHorse(text, result.farm);
+
+  // 3. 診断名を検出
+  result.diagnosis = detectDiagnosis(text);
+
+  // 4. 処置を検出
+  result.treatments = detectTreatments(text);
+
+  // 5. 薬品を検出
+  result.drugs = detectDrugs(text);
+
+  // 6. 距離を検出
+  result.km = detectKm(text);
+
+  // 7. 獣医を検出
+  if (text.includes("せき") || text.includes("関")) {
+    result.vet = "せき";
+    selectVet("せき");
+  } else if (text.includes("佐藤")) {
+    result.vet = "佐藤";
+    selectVet("佐藤");
+  }
+
+  // 結果をフォームに反映
+  applyResult(result);
+}
+
+function detectFarm(text) {
+  // "〇〇牧場" パターン
+  var farmMatch = text.match(/([^\s、。,]+(?:牧場|ファーム|ステーブル|スタッド))/);
+  if (farmMatch) {
+    var farmName = farmMatch[1];
+    var found = FARMS.find(function(f) { return f.name.includes(farmName) || farmName.includes(f.name); });
+    if (found) return found;
+    // 部分一致
+    found = FARMS.find(function(f) {
+      var shortName = f.name.replace(/[（(有)）株式会社]/g, "");
+      return shortName.includes(farmName.replace("牧場","")) || farmName.replace("牧場","").includes(shortName.replace("牧場",""));
+    });
+    if (found) return found;
+  }
+
+  // 全牧場名で部分一致検索
+  var bestMatch = null;
+  var bestLen = 0;
+  FARMS.forEach(function(f) {
+    var name = f.name.replace(/[（(有)）]/g, "");
+    if (text.includes(name) && name.length > bestLen) {
+      bestMatch = f;
+      bestLen = name.length;
+    }
+    // 「の」を除いたオーナー名でも検索
+    if (f.owner && text.includes(f.owner) && f.owner.length > bestLen) {
+      bestMatch = f;
+      bestLen = f.owner.length;
+    }
+  });
+
+  return bestMatch;
+}
+
+function detectHorse(text, farm) {
+  // "〇〇号" パターン
+  var horseMatch = text.match(/([^\s、。,]+)号/);
+  var searchHorses = farm ? HORSES.filter(function(h) { return h.farmId === farm.id; }) : HORSES;
+
+  if (horseMatch) {
+    var hName = horseMatch[1];
+    var found = searchHorses.find(function(h) { return h.name === hName || h.name === hName + "号"; });
+    if (found) return found;
+    // 全頭から検索
+    found = HORSES.find(function(h) { return h.name === hName || h.name === hName + "号"; });
+    if (found) return found;
+  }
+
+  // 既知の馬名で一致検索（長い名前を優先）
+  var bestMatch = null;
+  var bestLen = 0;
+  searchHorses.forEach(function(h) {
+    if (h.name && h.name.length >= 2 && text.includes(h.name) && h.name.length > bestLen) {
+      bestMatch = h;
+      bestLen = h.name.length;
+    }
+  });
+  if (!bestMatch && farm) {
+    // 全頭から再検索
+    HORSES.forEach(function(h) {
+      if (h.name && h.name.length >= 3 && text.includes(h.name) && h.name.length > bestLen) {
+        bestMatch = h;
+        bestLen = h.name.length;
+      }
+    });
+  }
+
+  return bestMatch;
+}
+
+function detectDiagnosis(text) {
+  // 診断名リストから最長一致
+  var found = [];
+  COMMON_DIAGNOSES.forEach(function(d) {
+    if (text.includes(d)) found.push(d);
+  });
+  // 最長の診断名を返す
+  if (found.length > 0) {
+    found.sort(function(a,b) { return b.length - a.length; });
+    return found[0];
+  }
+
+  // 妊娠関連
+  if (text.match(/妊娠\d+日/)) return text.match(/妊娠\d+日/)[0];
+  if (text.includes("妊娠確認")) return "妊娠確認";
+  if (text.includes("妊娠")) return "妊娠鑑定";
+
+  return "";
+}
+
+function detectTreatments(text) {
+  var found = [];
+
+  // 略称マッピングで検索
+  Object.keys(TREATMENT_ALIASES).forEach(function(alias) {
+    if (text.includes(alias)) {
+      var fullName = TREATMENT_ALIASES[alias];
+      var treatment = TREATMENTS.find(function(t) { return t.name === fullName; });
+      if (treatment && !found.find(function(f) { return f.name === treatment.name; })) {
+        // "筋注3本" のような数量検出
+        var qtyMatch = text.match(new RegExp(alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "\\s*(\\d+)\\s*(?:本|回)"));
+        var qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+        for (var i = 0; i < qty; i++) {
+          found.push({ name: treatment.name, points: treatment.points, fee: treatment.amount, treatmentId: treatment.id });
+        }
+      }
+    }
+  });
+
+  // 処置マスターの正式名称でも検索
+  TREATMENTS.forEach(function(t) {
+    if (text.includes(t.name) && !found.find(function(f) { return f.name === t.name; })) {
+      found.push({ name: t.name, points: t.points, fee: t.amount, treatmentId: t.id });
+    }
+  });
+
+  return found;
+}
+
+function detectDrugs(text) {
+  var found = [];
+
+  DRUGS.forEach(function(d) {
+    if (!d.name) return;
+    // 薬品名（3文字以上）で一致検索
+    if (d.name.length >= 3 && text.includes(d.name)) {
+      // 用量検出 "〇〇 5ml" "〇〇 10本"
+      var doseMatch = text.match(new RegExp(d.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "\\s*(\\d+)\\s*(?:" + (d.unit || "ml") + "|本|個|錠|包)"));
+      var dose = doseMatch ? parseInt(doseMatch[1]) : (d.defaultDose || 1);
+      found.push({
+        name: d.name,
+        dose: dose,
+        unit: d.unit || "ml",
+        price: d.pricePerUnit || d.salesPrice || 0,
+        drugId: d.id
+      });
+    }
+  });
+
+  return found;
+}
+
+function detectKm(text) {
+  var match = text.match(/(\d+)\s*(?:キロ|km|KM|ｋｍ)/i);
+  if (match) return parseInt(match[1]);
+
+  // "往診〇〇分" から距離推定（おまけ）
+  return null;
+}
+
+// ═══════════════════════════════════════════
+// 解析結果をフォームに反映
+// ═══════════════════════════════════════════
+
+function applyResult(result) {
+  // フォーム表示
+  document.getElementById("resultCard").classList.add("visible");
+
+  // 牧場
+  if (result.farm) {
+    document.getElementById("r_farm").value = result.farm.id;
+    onFarmChange();
+  }
+
+  // 馬（牧場選択後に設定）
+  if (result.horse) {
+    setTimeout(function() {
+      document.getElementById("r_horse").value = result.horse.id;
+    }, 100);
+  }
+
+  // 診断
+  if (result.diagnosis) {
+    document.getElementById("r_diagnosis").value = result.diagnosis;
+  }
+
+  // 距離
+  if (result.km) {
+    document.getElementById("r_km").value = result.km;
+    document.getElementById("r_km_fee").textContent = "(¥" + (result.km * 80).toLocaleString() + ")";
+  }
+
+  // 処置
+  selectedTreatments = result.treatments || [];
+  renderSelectedTreatments();
+
+  // 薬品
+  selectedDrugs = result.drugs || [];
+  renderSelectedDrugs();
+
+  updateTotal();
+}
+
+// ═══════════════════════════════════════════
+// 処置の管理
+// ═══════════════════════════════════════════
+
+function renderSelectedTreatments() {
+  var container = document.getElementById("treatmentList");
+  if (selectedTreatments.length === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:#94a3b8">処置なし</div>';
+    return;
+  }
+  container.innerHTML = selectedTreatments.map(function(t, i) {
+    return '<div class="treatment-item">' +
+      '<span class="t-name">' + t.name + '</span>' +
+      '<span class="t-fee">¥' + (t.fee || 0).toLocaleString() + '</span>' +
+      '<button class="t-remove" onclick="removeTreatment(' + i + ')">✕</button>' +
+      '</div>';
+  }).join("");
+  updateTotal();
+}
+
+function removeTreatment(idx) {
+  selectedTreatments.splice(idx, 1);
+  renderSelectedTreatments();
+}
+
+function addTreatment(treatId) {
+  var t = TREATMENTS.find(function(x) { return x.id === treatId; });
+  if (!t) return;
+  selectedTreatments.push({ name: t.name, points: t.points, fee: t.amount, treatmentId: t.id });
+  renderSelectedTreatments();
+}
+
+function renderTreatmentChips() {
+  var search = (document.getElementById("treatSearch").value || "").toLowerCase();
+  var container = document.getElementById("treatChips");
+
+  var filtered = TREATMENTS.filter(function(t) {
+    if (!search) return t.priority === "高";
+    return t.name.toLowerCase().includes(search);
+  });
+
+  container.innerHTML = filtered.slice(0, 20).map(function(t) {
+    return '<span class="chip" onclick="addTreatment(' + t.id + ')">' + t.name + ' ¥' + (t.amount || 0).toLocaleString() + '</span>';
+  }).join("");
+}
+
+// ═══════════════════════════════════════════
+// 薬品の管理
+// ═══════════════════════════════════════════
+
+function renderSelectedDrugs() {
+  var container = document.getElementById("drugList");
+  if (selectedDrugs.length === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:#94a3b8">投薬なし</div>';
+    return;
+  }
+  container.innerHTML = selectedDrugs.map(function(d, i) {
+    var totalPrice = (d.price || 0) * (d.dose || 1);
+    return '<div class="drug-item">' +
+      '<span class="d-name">' + d.name + '</span>' +
+      '<input type="number" class="d-dose" value="' + (d.dose || 1) + '" onchange="updateDrugDose(' + i + ', this.value)" />' +
+      '<span class="d-unit">' + (d.unit || "") + '</span>' +
+      '<span class="d-price">¥' + totalPrice.toLocaleString() + '</span>' +
+      '<button class="d-remove" onclick="removeDrug(' + i + ')">✕</button>' +
+      '</div>';
+  }).join("");
+  updateTotal();
+}
+
+function removeDrug(idx) {
+  selectedDrugs.splice(idx, 1);
+  renderSelectedDrugs();
+}
+
+function updateDrugDose(idx, newDose) {
+  selectedDrugs[idx].dose = Number(newDose) || 1;
+  renderSelectedDrugs();
+}
+
+function addDrug(drugId) {
+  var d = DRUGS.find(function(x) { return x.id === drugId; });
+  if (!d) return;
+  selectedDrugs.push({
+    name: d.name,
+    dose: d.defaultDose || 1,
+    unit: d.unit || "ml",
+    price: d.pricePerUnit || d.salesPrice || 0,
+    drugId: d.id
+  });
+  renderSelectedDrugs();
+}
+
+function renderDrugChips() {
+  var search = (document.getElementById("drugSearch").value || "").toLowerCase();
+  var container = document.getElementById("drugChips");
+
+  if (!search || search.length < 2) {
+    container.innerHTML = '<div style="font-size:12px;color:#94a3b8">2文字以上で検索</div>';
+    return;
+  }
+
+  var filtered = DRUGS.filter(function(d) {
+    return d.name && d.name.toLowerCase().includes(search);
+  });
+
+  container.innerHTML = filtered.slice(0, 15).map(function(d) {
+    return '<span class="chip" onclick="addDrug(' + d.id + ')">' + d.name + '</span>';
+  }).join("");
+}
+
+// ═══════════════════════════════════════════
+// 合計計算
+// ═══════════════════════════════════════════
+
+function updateTotal() {
+  var treatTotal = selectedTreatments.reduce(function(sum, t) { return sum + (t.fee || 0); }, 0);
+  var drugTotal = selectedDrugs.reduce(function(sum, d) { return sum + ((d.price || 0) * (d.dose || 1)); }, 0);
+  var km = Number(document.getElementById("r_km").value) || 0;
+  var vehicleFee = km * 80;
+  var adjustFee = Number(document.getElementById("r_adjust").value) || 0;
+
+  // 初診料/再診料
+  var visitType = document.getElementById("r_visitType").value;
+  var visitFee = 0; // 初診料は処置で追加する設計
+
+  var total = treatTotal + drugTotal + vehicleFee + adjustFee;
+
+  document.getElementById("totalAmount").textContent = "¥" + total.toLocaleString();
+}
+
+// ═══════════════════════════════════════════
+// 保存（Firestoreに書き込み）
+// ═══════════════════════════════════════════
+
+function saveCase() {
+  var farmId = Number(document.getElementById("r_farm").value);
+  var horseId = Number(document.getElementById("r_horse").value);
+  var date = document.getElementById("r_date").value;
+  var diagnosis = document.getElementById("r_diagnosis").value;
+  var visitType = document.getElementById("r_visitType").value;
+  var km = Number(document.getElementById("r_km").value) || 0;
+  var adjustFee = Number(document.getElementById("r_adjust").value) || 0;
+
+  if (!farmId || !horseId) {
+    showToast("牧場と馬を選択してください", "error");
+    return;
+  }
+  if (!date) {
+    showToast("日付を入力してください", "error");
+    return;
+  }
+
+  // 合計計算
+  var treatTotal = selectedTreatments.reduce(function(sum, t) { return sum + (t.fee || 0); }, 0);
+  var drugTotal = selectedDrugs.reduce(function(sum, d) { return sum + ((d.price || 0) * (d.dose || 1)); }, 0);
+  var vehicleFee = km * 80;
+  var totalFee = treatTotal + drugTotal + vehicleFee + adjustFee;
+
+  // 処置データ形式を本体EMRに合わせる
+  var treatments = selectedTreatments.map(function(t) {
+    return { name: t.name, points: t.points || 0, fee: t.fee || 0 };
+  });
+
+  // 薬品データ形式を本体EMRに合わせる
+  var drugs = selectedDrugs.map(function(d) {
+    return {
+      drugId: d.drugId,
+      name: d.name,
+      dose: d.dose || 1,
+      unit: d.unit || "",
+      price: (d.price || 0) * (d.dose || 1)
+    };
+  });
+
+  // 新しいケースID
+  var newId = Date.now();
+
+  var newCase = {
+    id: newId,
+    type: "一般",
+    horseId: horseId,
+    diagnosis: diagnosis || "診察",
+    caseStatus: "診療終了",
+    openDate: date,
+    vet: CURRENT_VET,
+    visits: [{
+      date: date,
+      visitType: visitType,
+      vitals: { t: "", p: "", r: "" },
+      treatments: treatments,
+      drugs: drugs,
+      vehicleKm: km || null,
+      adjustFee: adjustFee,
+      totalFee: totalFee
+    }],
+    _voiceInput: true,  // 音声入力フラグ
+    _voiceTimestamp: new Date().toISOString()
+  };
+
+  document.getElementById("saveBtn").disabled = true;
+  document.getElementById("saveBtn").textContent = "保存中...";
+
+  // Firestoreのcasesドキュメントを読み込んで追加
+  if (!FIREBASE_READY || !db) {
+    showToast("Firebase未接続です", "error");
+    document.getElementById("saveBtn").disabled = false;
+    document.getElementById("saveBtn").textContent = "保存";
+    return;
+  }
+
+  var casesRef = db.collection(SYNC_COLLECTION).doc("cases");
+  casesRef.get().then(function(snap) {
+    var cases = [];
+    if (snap.exists) {
+      var docData = snap.data();
+      if (docData.chunked) {
+        // チャンク対応
+        return loadCasesChunked(docData.totalChunks).then(function(allCases) {
+          allCases.push(newCase);
+          return writeCases(allCases);
+        });
+      } else {
+        cases = docData.data || [];
+      }
+    }
+    cases.push(newCase);
+    return writeCases(cases);
+  }).then(function() {
+    showToast("保存しました", "success");
+    addToHistory(newCase);
+    clearForm();
+  }).catch(function(err) {
+    console.error("[Voice] 保存エラー:", err);
+    showToast("保存に失敗しました: " + err.message, "error");
+  }).finally(function() {
+    document.getElementById("saveBtn").disabled = false;
+    document.getElementById("saveBtn").textContent = "保存";
+  });
+}
+
+function writeCases(cases) {
+  var CHUNK_SIZE = 200;
+  if (cases.length <= CHUNK_SIZE) {
+    return db.collection(SYNC_COLLECTION).doc("cases").set({
+      data: cases,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: deviceId,
+      source: "voice"
+    });
+  } else {
+    // チャンク書き込み
+    var batch = db.batch();
+    var totalChunks = Math.ceil(cases.length / CHUNK_SIZE);
+
+    batch.set(db.collection(SYNC_COLLECTION).doc("cases"), {
+      chunked: true,
+      totalChunks: totalChunks,
+      totalRecords: cases.length,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: deviceId,
+      source: "voice"
+    });
+
+    for (var i = 0; i < totalChunks; i++) {
+      var chunk = cases.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      batch.set(db.collection(SYNC_COLLECTION).doc("cases_chunk_" + i), { data: chunk });
+    }
+
+    return batch.commit();
+  }
+}
+
+function loadCasesChunked(totalChunks) {
+  var promises = [];
+  for (var i = 0; i < totalChunks; i++) {
+    promises.push(db.collection(SYNC_COLLECTION).doc("cases_chunk_" + i).get());
+  }
+  return Promise.all(promises).then(function(snaps) {
+    var allCases = [];
+    snaps.forEach(function(snap) {
+      if (snap.exists && snap.data().data) {
+        allCases = allCases.concat(snap.data().data);
+      }
+    });
+    return allCases;
+  });
+}
+
+// ═══════════════════════════════════════════
+// 今日の入力履歴
+// ═══════════════════════════════════════════
+
+function addToHistory(caseData) {
+  var horse = HORSES.find(function(h) { return h.id === caseData.horseId; });
+  var farm = FARMS.find(function(f) { return f.id === (horse ? horse.farmId : 0); });
+
+  todayHistory.unshift({
+    time: new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }),
+    farm: farm ? farm.name : "",
+    horse: horse ? horse.name : "",
+    diagnosis: caseData.diagnosis,
+    total: caseData.visits[0].totalFee,
+    treatments: caseData.visits[0].treatments.map(function(t) { return t.name; }).join("、"),
+    id: caseData.id
+  });
+
+  // ローカル保存
+  try {
+    localStorage.setItem("voice_today_" + new Date().toISOString().split("T")[0], JSON.stringify(todayHistory));
+  } catch(e) {}
+
+  renderHistory();
+}
+
+function loadTodayHistory() {
+  try {
+    var today = new Date().toISOString().split("T")[0];
+    var saved = localStorage.getItem("voice_today_" + today);
+    if (saved) todayHistory = JSON.parse(saved);
+  } catch(e) {}
+  renderHistory();
+}
+
+function renderHistory() {
+  var container = document.getElementById("historyList");
+  var count = document.getElementById("histCount");
+
+  if (todayHistory.length === 0) {
+    container.innerHTML = '<div style="color:#94a3b8;font-size:13px">まだ入力がありません</div>';
+    count.textContent = "";
+    return;
+  }
+
+  count.textContent = "(" + todayHistory.length + "件)";
+  container.innerHTML = todayHistory.map(function(h) {
+    return '<div class="hist-entry">' +
+      '<span class="h-total">¥' + (h.total || 0).toLocaleString() + '</span>' +
+      '<div class="h-time">' + h.time + '</div>' +
+      '<div class="h-farm">' + h.farm + '</div>' +
+      '<div class="h-horse">' + h.horse + ' — ' + (h.diagnosis || "") + '</div>' +
+      '<div class="h-detail">' + (h.treatments || "") + '</div>' +
+      '</div>';
+  }).join("");
+}
+
+// ═══════════════════════════════════════════
+// ユーティリティ
+// ═══════════════════════════════════════════
+
+function clearForm() {
+  document.getElementById("resultCard").classList.remove("visible");
+  document.getElementById("transcriptBox").classList.remove("visible");
+  document.getElementById("transcriptBox").textContent = "";
+  document.getElementById("r_farm").value = "";
+  document.getElementById("r_horse").innerHTML = '<option value="">選択してください</option>';
+  document.getElementById("r_diagnosis").value = "";
+  document.getElementById("r_km").value = "";
+  document.getElementById("r_km_fee").textContent = "";
+  document.getElementById("r_adjust").value = "0";
+  document.getElementById("r_date").value = new Date().toISOString().split("T")[0];
+  document.getElementById("r_visitType").value = "初診";
+  selectedTreatments = [];
+  selectedDrugs = [];
+  renderSelectedTreatments();
+  renderSelectedDrugs();
+  updateTotal();
+  finalTranscript = "";
+  interimTranscript = "";
+}
+
+function showToast(msg, type) {
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast " + (type || "success") + " show";
+  setTimeout(function() { t.classList.remove("show"); }, 2500);
+}
+
+// ═══════════════════════════════════════════
+// 初期化
+// ═══════════════════════════════════════════
+
+window.addEventListener("DOMContentLoaded", function() {
+  initFirebase();
+  initSpeechRecognition();
+  renderTreatmentChips();
+
+  // 初期表示
+  document.getElementById("r_date").value = new Date().toISOString().split("T")[0];
+});
+</script>
+</body>
+</html>
