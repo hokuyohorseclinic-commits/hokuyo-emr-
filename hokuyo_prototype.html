@@ -10024,40 +10024,78 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
 
   const insPending = (insuranceList || []).filter(e => !e.done);
 
+  // ── タブ・検索・並べ替え ──
+  const [docTab, setDocTab] = useState("ins");          // ins | repo | cast | other
+  const [docSearch, setDocSearch] = useState("");
+  const [docSort, setDocSort] = useState({key:"date", dir:"desc"});
+  const [docShow, setDocShow] = useState("all");        // all | pending | done
+  const [docYear, setDocYear] = useState("");
+  const E = React.createElement;
+  const toggleDocSort = (key) => setDocSort(s => s.key === key ? {key, dir: s.dir === "asc" ? "desc" : "asc"} : {key, dir: key === "date" ? "desc" : "asc"});
+  const sortIcon = (key) => docSort.key === key ? E("span", {style:{fontSize:10,marginLeft:4}}, docSort.dir === "asc" ? "▲" : "▼") : E("span", {style:{fontSize:10,marginLeft:4,color:"#d1d5db"}}, "↕");
+  const th = (label, key, extra) => E("th", Object.assign({onClick: key ? () => toggleDocSort(key) : undefined, style: Object.assign({cursor: key ? "pointer" : "default", userSelect:"none", whiteSpace:"nowrap"}, extra || {})}), label, key ? sortIcon(key) : null);
+  // rows: {date, horse, farm, done, ...}
+  const applyListFilters = (rows) => {
+    const q = docSearch.trim().toLowerCase();
+    let r = rows.filter(x => {
+      if (docShow === "pending" && x.done) return false;
+      if (docShow === "done" && !x.done) return false;
+      if (docYear && !(x.date || "").startsWith(docYear)) return false;
+      if (!q) return true;
+      return (x.horse || "").toLowerCase().includes(q) || (x.farm || "").toLowerCase().includes(q) || (x.extra || "").toLowerCase().includes(q);
+    });
+    const k = docSort.key, d = docSort.dir === "asc" ? 1 : -1;
+    r.sort((a, b) => {
+      const va = k === "date" ? (a.date || "") : k === "farm" ? (a.farm || "") : k === "horse" ? (a.horse || "") : (a[k] || "");
+      const vb = k === "date" ? (b.date || "") : k === "farm" ? (b.farm || "") : k === "horse" ? (b.horse || "") : (b[k] || "");
+      const c = String(va).localeCompare(String(vb), "ja");
+      return c !== 0 ? c * d : (b.date || "").localeCompare(a.date || "");
+    });
+    return r;
+  };
+  const yearsOf = (rows) => Array.from(new Set(rows.map(x => (x.date || "").slice(0,4)).filter(Boolean))).sort().reverse();
+  const listToolbar = (rows, pendingLabel, onBulkDone) => E("div", {style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}},
+    E("input", {className:"inp", value: docSearch, onChange: e => setDocSearch(e.target.value), placeholder: "馬名・牧場で検索...", style:{maxWidth:260}}),
+    E("select", {className:"inp", value: docYear, onChange: e => setDocYear(e.target.value), style:{width:110}}, E("option", {value:""}, "全年"), yearsOf(rows).map(y => E("option", {key:y, value:y}, y + "年"))),
+    E("div", {style:{display:"flex",gap:3}},
+      [["all","全て"],["pending",pendingLabel || "未完了"],["done","完了"]].map(([v,l]) => E("button", {key:v, onClick:()=>setDocShow(v), className:"tab-btn " + (docShow === v ? "active" : ""), style:{padding:"3px 10px",fontSize:11}}, l, v === "pending" ? "(" + rows.filter(x=>!x.done).length + ")" : v === "done" ? "(" + rows.filter(x=>x.done).length + ")" : "(" + rows.length + ")"))),
+    E("span", {style:{fontSize:11,color:"#6b7280"}}, "並べ替え: 列見出しをクリック（日付・馬名・牧場）"),
+    onBulkDone ? E("button", {onClick:()=>{ const shown = applyListFilters(rows).filter(x=>!x.done); if (!shown.length) return; if (confirm("表示中の未完了 " + shown.length + " 件をすべて「済」にしますか？")) onBulkDone(shown); }, style:{marginLeft:"auto",fontSize:11,padding:"4px 10px",border:"1px solid #22c55e",borderRadius:6,background:"#f0fdf4",color:"#16a34a",cursor:"pointer",fontWeight:600}}, "表示中を全て ✓済") : null
+  );
+  const docTabBar = E("div", {style:{display:"flex",gap:4,marginBottom:16,background:"#f3f4f6",padding:4,borderRadius:10,width:"fit-content"}},
+    [{id:"ins", l:"🏥 保険診断", n:(insuranceList||[]).length, p:insPending.length},
+     {id:"repo", l:"🔬 レポジトリー", n:repoKartes.length, p:repoPending.length},
+     {id:"cast", l:"✂️ 去勢証明", n:castrationKartes.length, p:castrationPending.length},
+     {id:"other", l:"その他", n:null, p:0}].map(t => E("button", {key:t.id, onClick:()=>{ setDocTab(t.id); setDocSearch(""); setDocShow("all"); setDocYear(""); }, className:"tab-btn " + (docTab === t.id ? "active" : "")}, t.l, t.n != null ? "(" + t.n + ")" : "", t.p > 0 ? E("span", {style:{marginLeft:6,background:"#f59e0b",color:"#fff",borderRadius:10,padding:"0 6px",fontSize:10,fontWeight:700}}, t.p) : null)));
+
   return React.createElement("div", null,
-    React.createElement("h1", {style:{fontSize:22,fontWeight:700,marginBottom:24}}, "診断書・書類"),
+    React.createElement("h1", {style:{fontSize:22,fontWeight:700,marginBottom:12}}, "診断書・書類"),
+    docTabBar,
 
-    // === Two main cards: Insurance + Repository ===
-    React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}},
-      React.createElement("div", {className:"card",style:{padding:24}},
-        React.createElement("div", {style:{fontSize:28,marginBottom:8}}, "🏥"),
-        React.createElement("h3", {style:{fontSize:16,fontWeight:700,marginBottom:8}}, "競走馬保険審査報告書"),
-        React.createElement("p", {style:{fontSize:13,color:"#6b7280",marginBottom:16}}, "三井住友・損保ジャパン対応。外部依頼の保険診断書を作成・印刷・保存"),
-        React.createElement("button", {
-          className:"btn btn-primary",
-          onClick:()=>window.open("https://hokuyohorseclinic-commits.github.io/racehorse-insurance/","_blank")
-        }, "フォームを開く →"),
-        React.createElement("div", {style:{fontSize:11,color:"#9ca3af",marginTop:10}}, "※ 保存済みデータはフォーム側のLocalStorageに保持されます")
+    // === 外部フォームへのリンク（各タブの上に小さく表示） ===
+    (docTab === "ins" || docTab === "repo") && React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr",gap:16,marginBottom:16}},
+      docTab === "ins" && React.createElement("div", {className:"card",style:{padding:"12px 16px",display:"flex",alignItems:"center",gap:14}},
+        React.createElement("div", {style:{fontSize:22}}, "🏥"),
+        React.createElement("div", {style:{flex:1}},
+          React.createElement("div", {style:{fontSize:14,fontWeight:700}}, "競走馬保険審査報告書"),
+          React.createElement("div", {style:{fontSize:12,color:"#6b7280"}}, "三井住友・損保ジャパン対応。外部フォームで作成・印刷（保存データはフォーム側に保持）")),
+        React.createElement("button", {className:"btn btn-primary", style:{fontSize:12}, onClick:()=>window.open("https://hokuyohorseclinic-commits.github.io/racehorse-insurance/","_blank")}, "フォームを開く →")
       ),
-
-      React.createElement("div", {className:"card",style:{padding:24}},
-        React.createElement("div", {style:{fontSize:28,marginBottom:8}}, "🔬"),
-        React.createElement("h3", {style:{fontSize:16,fontWeight:700,marginBottom:8}}, "レポジトリー検査報告書"),
-        React.createElement("p", {style:{fontSize:13,color:"#6b7280",marginBottom:12}}, "JBBA準拠。レポジトリー検査の報告書を作成・印刷・保存"),
-        React.createElement("button", {
-          className:"btn btn-primary",style:{marginBottom:8},
-          onClick:()=>window.open(repoFormUrl,"_blank")
-        }, "フォームを開く →"),
-        React.createElement("div", {style:{fontSize:11,color:"#9ca3af",marginBottom:10}}, "※ 保存済みデータはフォーム側のLocalStorageに保持されます")
+      docTab === "repo" && React.createElement("div", {className:"card",style:{padding:"12px 16px",display:"flex",alignItems:"center",gap:14}},
+        React.createElement("div", {style:{fontSize:22}}, "🔬"),
+        React.createElement("div", {style:{flex:1}},
+          React.createElement("div", {style:{fontSize:14,fontWeight:700}}, "レポジトリー検査報告書"),
+          React.createElement("div", {style:{fontSize:12,color:"#6b7280"}}, "JBBA準拠。外部フォーム（hokuyo-exam）で作成・印刷（保存データはフォーム側に保持）")),
+        React.createElement("button", {className:"btn btn-primary", style:{fontSize:12}, onClick:()=>window.open(repoFormUrl,"_blank")}, "フォームを開く →")
       )
     ),
 
     // === 保険診断書リスト ===
-    React.createElement("div", {style:{marginBottom:24}},
+    docTab === "ins" && React.createElement("div", {style:{marginBottom:24}},
       React.createElement("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
         React.createElement("div", null,
-          React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:2}}, "🏥 競走馬保険診断リスト"),
-          React.createElement("p", {style:{fontSize:12,color:"#6b7280"}}, "保険診断書を作成した馬の管理リスト")
+          React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:2}}, "🏥 競走馬保険診断リスト（診断した馬の一覧）"),
+          React.createElement("p", {style:{fontSize:12,color:"#6b7280"}}, "保険診断書を作成した馬の管理リスト。追加・JSONインポートで登録")
         ),
         React.createElement("div", {style:{display:"flex",gap:8}},
           React.createElement("button", {
@@ -10128,26 +10166,24 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
         React.createElement("button", {className:"btn btn-primary",style:{fontSize:12,padding:"6px 16px"},onClick:addInsuranceEntry}, "登録")
       ),
       // List
+      listToolbar((insuranceList || []).map(e => ({date:e.date, horse:e.horseName, farm:e.farmName, done:!!e.done, extra:(e.company||"")+" "+(e.memo||""), company:e.company, e:e})), "未完了", (rows) => onUpdateInsuranceList(insuranceList.map(x => rows.some(r => r.e.id === x.id) ? {...x, done:true} : x))),
       (!insuranceList || insuranceList.length === 0)
         ? React.createElement("div", {className:"card",style:{padding:20,textAlign:"center",color:"#9ca3af",fontSize:13}}, "保険診断の記録はまだありません。「＋ 追加」から登録してください。")
-        : React.createElement("div", {className:"card",style:{overflow:"auto"}},
-            insPending.length > 0 && React.createElement("div", {style:{padding:"8px 16px",background:"#fef3c7",borderBottom:"1px solid #fde68a",fontSize:12,color:"#92400e"}},
-              "⚠ 未完了: ", insPending.length, "件"
-            ),
+        : React.createElement("div", {className:"card",style:{overflow:"auto",maxHeight:"60vh"}},
             React.createElement("table", null,
               React.createElement("thead", null,
-                React.createElement("tr", {style:{background:"#f9fafb"}},
-                  React.createElement("th", null, "診断日"),
-                  React.createElement("th", null, "馬名"),
-                  React.createElement("th", null, "牧場"),
-                  React.createElement("th", null, "保険会社"),
+                React.createElement("tr", {style:{background:"#f9fafb",position:"sticky",top:0,zIndex:1}},
+                  th("診断日", "date"),
+                  th("馬名", "horse"),
+                  th("牧場", "farm"),
+                  th("保険会社", "company"),
                   React.createElement("th", null, "備考"),
                   React.createElement("th", null, "状態"),
                   React.createElement("th", null, "")
                 )
               ),
               React.createElement("tbody", null,
-                (insuranceList || []).map(e =>
+                applyListFilters((insuranceList || []).map(e => ({date:e.date, horse:e.horseName, farm:e.farmName, done:!!e.done, extra:(e.company||"")+" "+(e.memo||""), company:e.company, e:e}))).map(row => row.e).map(e =>
                   React.createElement("tr", {key:e.id,style:{background:e.done?"#f0fdf4":"transparent"}},
                     React.createElement("td", {style:{fontSize:12}}, e.date),
                     React.createElement("td", {style:{fontWeight:600}}, e.horseName),
@@ -10184,33 +10220,31 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
     ),
 
     // === Repository karte list (informational) ===
-    React.createElement("div", {style:{marginBottom:24}},
-      React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:4}}, "報告書が必要なレポジトリー検査"),
-      React.createElement("p", {style:{fontSize:12,color:"#6b7280",marginBottom:12}}, "一般カルテで病名に「レポジトリー」を含むカルテの一覧です。報告書は外部アプリ（hokuyo-exam）で作成してください。"),
+    docTab === "repo" && React.createElement("div", {style:{marginBottom:24}},
+      React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:4}}, "レポジトリー検査（報告書の作成状況）"),
+      React.createElement("p", {style:{fontSize:12,color:"#6b7280",marginBottom:8}}, "一般カルテで病名に「レポジトリー」を含むカルテの一覧。報告書は外部アプリ（hokuyo-exam）で作成。"),
+      listToolbar(repoKartes.map(k => { const h = horses.find(x => x.id === k.horseId); const f = farms.find(x => x.id === (k.farmId || (h && h.farmId))); return {date:k.openDate, horse:h?h.name:"", farm:f?f.name:"", done:!!k.reportDone, extra:k.diagnosis||"", k:k}; }), "未作成", (rows) => rows.forEach(r => onToggleReportDone(r.k.id, true))),
       repoKartes.length === 0
         ? React.createElement("div", {className:"card",style:{padding:24,textAlign:"center",color:"#9ca3af"}},
             React.createElement("div", {style:{fontSize:30,marginBottom:8}}, "🔬"),
             React.createElement("div", null, "レポジトリー検査のカルテはまだありません")
           )
-        : React.createElement("div", {className:"card",style:{overflow:"auto"}},
-            repoPending.length > 0 && React.createElement("div", {style:{padding:"10px 16px",background:"#fef3c7",borderBottom:"1px solid #fde68a",fontSize:12,color:"#92400e"}},
-              "⚠ 未作成の報告書: ", repoPending.length, "件"
-            ),
+        : React.createElement("div", {className:"card",style:{overflow:"auto",maxHeight:"60vh"}},
             React.createElement("table", null,
               React.createElement("thead", null,
-                React.createElement("tr", {style:{background:"#f9fafb"}},
-                  React.createElement("th", null, "日付"),
-                  React.createElement("th", null, "馬名"),
-                  React.createElement("th", null, "牧場"),
+                React.createElement("tr", {style:{background:"#f9fafb",position:"sticky",top:0,zIndex:1}},
+                  th("日付", "date"),
+                  th("馬名", "horse"),
+                  th("牧場", "farm"),
                   React.createElement("th", null, "病名"),
                   React.createElement("th", null, "カルテ状態"),
                   React.createElement("th", null, "報告書")
                 )
               ),
               React.createElement("tbody", null,
-                repoKartes.sort((a,b)=>(b.openDate||"").localeCompare(a.openDate||"")).map(k => {
+                applyListFilters(repoKartes.map(k => { const h = horses.find(x => x.id === k.horseId); const f = farms.find(x => x.id === (k.farmId || (h && h.farmId))); return {date:k.openDate, horse:h?h.name:"", farm:f?f.name:"", done:!!k.reportDone, extra:k.diagnosis||"", k:k}; })).map(row => row.k).map(k => {
                   const h = horses.find(x => x.id === k.horseId);
-                  const f = h ? farms.find(x => x.id === (k.farmId || h.farmId)) : null;
+                  const f = farms.find(x => x.id === (k.farmId || (h && h.farmId)));
                   // Build URL with horse data matching hokuyo-exam field IDs
                   const params = new URLSearchParams();
                   if (h?.name) params.set("name", h.name);         // f-name
@@ -10260,31 +10294,29 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
     ),
 
     // === 去勢証明書セクション ===
-    React.createElement("div", {style:{marginBottom:24}},
+    docTab === "cast" && React.createElement("div", {style:{marginBottom:24}},
       React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:4}}, "✂️ 去勢証明書"),
-      React.createElement("p", {style:{fontSize:12,color:"#6b7280",marginBottom:12}}, "一般カルテで病名に「去勢」を含むカルテから自動取得。クリックで証明書を作成・印刷できます。"),
+      React.createElement("p", {style:{fontSize:12,color:"#6b7280",marginBottom:8}}, "一般カルテで病名に「去勢」を含むカルテから自動取得。クリックで証明書を作成・印刷できます。"),
+      listToolbar(castrationKartes.map(k => { const h = horses.find(x => x.id === k.horseId); const f = farms.find(x => x.id === (k.farmId || (h && h.farmId))); return {date:k.openDate, horse:h?h.name:"", farm:f?f.name:"", done:!!k.certDone, extra:"", k:k}; }), "未発行", (rows) => rows.forEach(r => onToggleCertDone(r.k.id, true))),
       castrationKartes.length === 0
         ? React.createElement("div", {className:"card",style:{padding:24,textAlign:"center",color:"#9ca3af"}},
             React.createElement("div", {style:{fontSize:30,marginBottom:8}}, "✂️"),
             React.createElement("div", null, "去勢カルテはまだありません")
           )
-        : React.createElement("div", {className:"card",style:{overflow:"auto"}},
-            castrationPending.length > 0 && React.createElement("div", {style:{padding:"10px 16px",background:"#fef3c7",borderBottom:"1px solid #fde68a",fontSize:12,color:"#92400e"}},
-              "⚠ 未発行の証明書: ", castrationPending.length, "件"
-            ),
+        : React.createElement("div", {className:"card",style:{overflow:"auto",maxHeight:"60vh"}},
             React.createElement("table", null,
               React.createElement("thead", null,
-                React.createElement("tr", {style:{background:"#f9fafb"}},
-                  React.createElement("th", null, "日付"),
-                  React.createElement("th", null, "馬名"),
-                  React.createElement("th", null, "所有者"),
+                React.createElement("tr", {style:{background:"#f9fafb",position:"sticky",top:0,zIndex:1}},
+                  th("日付", "date"),
+                  th("馬名", "horse"),
+                  th("所有者", "farm"),
                   React.createElement("th", null, "証明書")
                 )
               ),
               React.createElement("tbody", null,
-                castrationKartes.sort((a,b)=>(b.openDate||"").localeCompare(a.openDate||"")).map(k => {
+                applyListFilters(castrationKartes.map(k => { const h = horses.find(x => x.id === k.horseId); const f = farms.find(x => x.id === (k.farmId || (h && h.farmId))); return {date:k.openDate, horse:h?h.name:"", farm:f?f.name:"", done:!!k.certDone, extra:"", k:k}; })).map(row => row.k).map(k => {
                   const h = horses.find(x => x.id === k.horseId);
-                  const f = h ? farms.find(x => x.id === (k.farmId || h.farmId)) : null;
+                  const f = farms.find(x => x.id === (k.farmId || (h && h.farmId)));
                   return React.createElement("tr", {key:k.id,style:{background:k.certDone?"#f0fdf4":"transparent"}},
                     React.createElement("td", {style:{fontSize:12}}, k.openDate),
                     React.createElement("td", {style:{fontWeight:600}}, h?.name || "—"),
@@ -10423,8 +10455,8 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
     ),
 
     // === Other documents (placeholder) ===
-    React.createElement("h2", {style:{fontSize:15,fontWeight:600,marginBottom:12,color:"#6b7280"}}, "その他の書類"),
-    React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+    docTab === "other" && React.createElement("h2", {style:{fontSize:15,fontWeight:600,marginBottom:12,color:"#6b7280"}}, "その他の書類"),
+    docTab === "other" && React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
       [{icon:"❤️",t:"健康診断書",d:"健康状態証明"},{icon:"💉",t:"予防接種証明",d:"ワクチン接種履歴"}].map(d =>
         React.createElement("div", {key:d.t,className:"card",style:{padding:16,opacity:0.6}},
           React.createElement("div", {style:{fontSize:22,marginBottom:6}}, d.icon),
