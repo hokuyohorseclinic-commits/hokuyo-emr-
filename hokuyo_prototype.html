@@ -8657,7 +8657,9 @@ function DashboardPage({
   const [bsSort, setBsSort] = useState("date");       // date | farm | horse
   const [bsShowAll, setBsShowAll] = useState(false);  // 期日前（14日より先）も表示
   const todayCases = cases.filter(c => {
-    if (c.type === "\u4E00\u822C") return c.visits?.some(v => v.date === todayStr) || c.caseStatus === "\u7D99\u7D9A\u4E2D";
+    if (c.archived) return false;
+    if (c.type === "\u4E00\u822C") return (c.visits || []).some(v => v.date === todayStr);
+    if (c.type === "\u7E41\u6B96") return (c.findings || []).some(f => f.date === todayStr);
     return c.openDate === todayStr;
   });
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -8700,7 +8702,7 @@ function DashboardPage({
     icon: "🩺",
     label: "今日の診療",
     value: todayCases.length + "件",
-    sub: `継続中 ${contCases.length}件`,
+    sub: `継続中 ${contCasesAll.length}件（${STALE_DAYS}日以内 ${contCasesAll.length - contStale.length}）`,
     color: "#dbeafe"
   }, {
     icon: "🤱",
