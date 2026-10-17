@@ -1284,6 +1284,96 @@ if(c.type==="繁殖"&&typeof INIT_BREEDING_TREATMENTS!=="undefined")return calcB
 return 0;
 }
 function daysBetween(a,b){return Math.floor((new Date(b)-new Date(a))/86400000);}
+// ═══ 繁殖スケジュール判定ルール（ダッシュボード用）═══
+// 所見を日付順に見て「最後に起きた出来事」から実状態を決める（breedingStatusが古くても追従する）
+//   種付 → 種付中 ／ 受胎＋ → 受胎 ／ 受胎− → 不受胎 ／ どれも無し → 継続中（卵胞チェック中）
+// 次回予定（1頭1件）:
+//   種付中 : 妊鑑 = 種付日 + N日（予定欄「♂16day」のN、無ければ15日）。判定が入るまで消えない（超過は赤）
+//   不受胎 : 次発情 = 判定日(PG投与日) + N日（予定欄「pg3」「4day」のN、無ければ4日）。再種付まで消えない
+//   受胎   : 再鑑定 = 種付日 + N日（予定欄「28」「35」「4w」等）。無ければ 28→35→49→63 の次の節目（最終診察日より後）
+//   継続中 : 次回 = 最終診察日 + N日（予定欄「8day」「pg5」のN）。予定欄が無ければ載せない
+//   いずれも、将来日付の所見行があればそれを「予定」として優先
+function parseBreedingSched(str){
+  if(!str) return null;
+  var t=String(str).trim().toLowerCase().replace(/[０-９]/g,function(ch){return String.fromCharCode(ch.charCodeAt(0)-0xFEE0);});
+  var m;
+  if((m=t.match(/^♂\s*(\d+)/))) return {kind:"ins",days:+m[1]};       // ♂16day = 種付+16
+  if((m=t.match(/pg\s*(\d+)|(\d+)\s*pg/))) return {kind:"rel",days:+(m[1]||m[2])}; // pg3 / 9pg = 当日+3
+  if((m=t.match(/^(\d+)\s*w$/))) return {kind:"ges",days:+m[1]*7};     // 4w = 胎齢28日
+  if((m=t.match(/^(\d+)\s*d(ay)?/))) return {kind:"rel",days:+m[1]};    // 8day = 当日+8
+  if((m=t.match(/^(\d+)$/))) return {kind:"ges",days:+m[1]};            // 28 = 胎齢28日
+  return null;
+}
+function breedingEffective(c, todayS){
+  var fs=(c.findings||[]).slice().sort(function(a,b){return (a.date||"").localeCompare(b.date||"");});
+  var lastIns="",lastJudge="",judge="",lastDate="";
+  fs.forEach(function(f){
+    if(!f.date) return;
+    if(todayS && f.date>todayS) return;   // 将来日付（予定行）は状態判定に使わない
+    lastDate=f.date;
+    if(f.insem){lastIns=f.date;judge="";}
+    if(f.concep){lastJudge=f.date;judge="+";}
+    if(f.notConcep){lastJudge=f.date;judge="-";}
+  });
+  var insDate=lastIns||c.inseminationDate||"";
+  var st;
+  if(judge==="+") st="受胎";
+  else if(judge==="-") st="不受胎";
+  else if(lastIns) st="種付中";
+  else st=(c.breedingStatus==="受胎"||c.breedingStatus==="不受胎"||c.breedingStatus==="種付中")?c.breedingStatus:"継続中";
+  if(c.breedingStatus==="配合しない"||c.breedingStatus==="診療終了"||c.breedingStatus==="終了") st=c.breedingStatus;
+  return {status:st,insDate:insDate,judgeDate:lastJudge,lastDate:lastDate,findings:fs};
+}
+function breedingNextEvent(c, todayS){
+  var e=breedingEffective(c, todayS); var fs=e.findings;
+  var past=fs.filter(function(f){return !(f.date>todayS);});
+  var last=past.length?past[past.length-1]:null;
+  var sched=last?parseBreedingSched(last.schedule):null;
+  var addD=function(ds,n){var d=new Date(ds+"T00:00:00");d.setDate(d.getDate()+n);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");};
+  var lbl=function(diff){return diff===0?"本日":diff<0?Math.abs(diff)+"日超過":diff+"日後";};
+  // 将来日付の所見（手入力の予定行）があれば最優先
+  var fut=fs.filter(function(f){return f.date>todayS;})[0];
+  if(fut){var fd=daysBetween(todayS,fut.date);return {status:e.status,date:fut.date,type:"予定",detail:(fut.schedule||fut.memo||"")+" ("+fd+"日後)",diff:fd,rule:"手入力の予定行"};}
+  var st=e.status, target=null, type="", detail="", rule="";
+  if(st==="種付中"&&e.insDate){
+    var n=(sched&&sched.kind==="ins")?sched.days:(sched&&sched.kind==="rel"&&last.date===e.insDate)?sched.days:15;
+    target=addD(e.insDate,n); type="妊鑑"; rule="種付日+"+n+"日";
+    var d1=daysBetween(e.insDate,todayS);
+    detail="種付"+d1+"日目"+(todayS>target?" ⚠未鑑定":"")+"（"+rule+"）";
+  } else if(st==="不受胎"&&e.judgeDate){
+    var base=last&&last.date>=e.judgeDate?last.date:e.judgeDate;
+    var n2=(sched&&sched.kind==="rel")?sched.days:4;
+    target=addD(base,n2); type="次発情"; rule=(sched&&sched.kind==="rel"?"PG/予定欄 +":"判定日+")+n2+"日";
+    var d2=daysBetween(e.judgeDate,todayS);
+    detail="不受胎判定から"+d2+"日"+(todayS>target?" ⚠再種付なし":"")+"（"+rule+"）";
+  } else if(st==="受胎"&&e.insDate){
+    var ges=daysBetween(e.insDate,todayS);
+    if(sched&&sched.kind==="ges"){target=addD(e.insDate,sched.days);rule="胎齢"+sched.days+"日";}
+    else if(sched&&sched.kind==="rel"){target=addD(last.date,sched.days);rule="最終診察+"+sched.days+"日";}
+    else {
+      var ms=[28,35,49,63], lastGes=last?daysBetween(e.insDate,last.date):0;
+      for(var i=0;i<ms.length;i++){ if(ms[i]>lastGes){target=addD(e.insDate,ms[i]);rule="胎齢"+ms[i]+"日（節目）";break;} }
+    }
+    if(target){type="再鑑定";detail="胎齢"+ges+"日（"+rule+"）";}
+  } else if(st==="継続中"){
+    if(sched&&(sched.kind==="rel"||sched.kind==="ins")&&last){target=addD(last.date,sched.days);type="次回";rule="最終診察+"+sched.days+"日";detail=(last.schedule||"")+"（"+rule+"）";}
+  }
+  if(!target) return {status:st,date:null};
+  var diff=daysBetween(todayS,target);
+  var keep = type==="妊鑑" ? 60 : type==="次発情" ? 30 : 21;   // 超過後も載せておく日数
+  if(diff < -keep) return {status:st,date:null,dropped:true};
+  return {status:st,date:target,type:type,detail:detail+" "+lbl(diff),diff:diff,rule:rule};
+}
+// 保存トースト（画面下に3秒表示）
+function showToast(msg, kind){
+  try{
+    var old=document.getElementById("__toast"); if(old) old.remove();
+    var d=document.createElement("div"); d.id="__toast"; d.textContent=msg;
+    d.style.cssText="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:"+(kind==="warn"?"#b45309":"#111827")+";color:#fff;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);z-index:99999;max-width:90vw;white-space:pre-line;transition:opacity .4s";
+    document.body.appendChild(d);
+    setTimeout(function(){d.style.opacity="0";},2600); setTimeout(function(){d.remove();},3100);
+  }catch(e){}
+}
 function todayJST(){var d=new Date();d.setMinutes(d.getMinutes()+d.getTimezoneOffset()+540);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 // 薬品カテゴリ自動判定
 
@@ -2910,6 +3000,7 @@ function GeneralKartePage({
       adjustFee: Number(adjustFee) || 0,
       memo
     }] : [];
+    showToast("✓ カルテを作成しました　" + (horse ? horse.name : "") + "　" + diagnosis + (hasTreatData ? "　¥" + currentTotal.toLocaleString() : ""));
     onSave({
       id: Date.now(),
       type: "\u4E00\u822C",
@@ -2951,6 +3042,7 @@ function GeneralKartePage({
     } else {
       updatedVisits = [...pastVisits, nv];
     }
+    showToast("✓ 保存しました　" + (horse ? horse.name : "") + "　" + visitDate + " " + (visitType || "") + "　¥" + currentTotal.toLocaleString() + (editVisitIdx >= 0 ? "（更新）" : ""));
     onSave({
       id: kase?.id || Date.now(),
       type: "\u4E00\u822C",
@@ -2977,12 +3069,16 @@ function GeneralKartePage({
     setMemo("");
   };
   // コピー機能: 過去の診療行の処置・投薬を現在の入力に貼り付け
-  const copyVisit = v => {
+  const copyVisit = (v, quiet) => {
     if (v.treatments && v.treatments.length > 0) setSelTreatments(v.treatments);
-    if (v.drugs && v.drugs.length > 0) setDrugRows(v.drugs.map(r => ({drugId:String(r.drugId),dose:String(r.dose||""),memo:r.memo||""})));
+    if (v.drugs && v.drugs.length > 0) setDrugRows(v.drugs.map(r => ({drugId:String(r.drugId),dose:String(r.dose||""),memo:r.memo||"",useRx:!!r.useRx})));
     if (v.vehicleKm) setVehicleKm(String(v.vehicleKm));
-    alert("\u51E6\u7F6E\u30FB\u6295\u85AC\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F");
+    if (!visitType) setVisitType("再診");
+    showToast((quiet ? "前回（" + (v.date || "") + "）の処置・投薬を読み込みました" : "処置・投薬をコピーしました") + "\n内容を確認して「診療保存」を押してください");
   };
+  // 「前回と同じ」: 直近の診療行を読み込む（再診扱い）
+  const lastVisitForCopy = pastVisits.length > 0 ? pastVisits.reduce((mx, v) => (!mx || (v.date || "") >= (mx.date || "")) ? v : mx, null) : null;
+  const formIsEmpty = selTreatments.length === 0 && !drugRows.some(r => r.drugId) && !vehicleKm && !memo;
   // 削除機能: 診療履歴の行を削除
   const deleteVisit = (idx) => {
     if (!kase) return;
@@ -3138,7 +3234,12 @@ function GeneralKartePage({
       padding: "8px 24px",
       fontSize: 15
     }
-  }, isNew ? "\u30AB\u30EB\u30C6\u4F5C\u6210" : editVisitIdx >= 0 ? "\u2713 \u66F4\u65B0\u4FDD\u5B58" : "\u2713 \u8A3A\u7642\u4FDD\u5B58 \u2192 \u53F3\u3078"), editVisitIdx >= 0 && /*#__PURE__*/React.createElement("button", {
+  }, isNew ? "\u30AB\u30EB\u30C6\u4F5C\u6210" : editVisitIdx >= 0 ? "\u2713 \u66F4\u65B0\u4FDD\u5B58" : "\u2713 \u8A3A\u7642\u4FDD\u5B58 \u2192 \u53F3\u3078"), !isNew && editVisitIdx < 0 && lastVisitForCopy && formIsEmpty && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-secondary",
+    title: "直近の診療（" + (lastVisitForCopy.date || "") + "）の処置・投薬・距離をそのまま読み込み、再診として入力します",
+    onClick: () => copyVisit(lastVisitForCopy, true),
+    style: { padding: "8px 14px", fontSize: 14, borderColor: "#f59e0b", color: "#92400e", background: "#fffbeb" }
+  }, "\u27F2 \u524D\u56DE\u3068\u540C\u3058\uFF08" + (lastVisitForCopy.date || "").slice(5).replace("-", "/") + "\uFF09"), editVisitIdx >= 0 && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-secondary",
     onClick: cancelEdit,
     style: {
@@ -3337,7 +3438,7 @@ function GeneralKartePage({
       display: "flex",
       gap: 4
     }
-  }, [{k:"\u521D\u8A3A",fee:2000},{k:"\u518D\u8A3A",fee:1000},{k:"",fee:0}].map(o => /*#__PURE__*/React.createElement("button", {
+  }, [{k:"\u521D\u8A3A",fee:1500},{k:"\u518D\u8A3A",fee:750},{k:"",fee:0}].map(o => /*#__PURE__*/React.createElement("button", {
     key: o.k || "none",
     onClick: () => setVisitType(o.k),
     className: `tab-btn ${visitType === o.k ? "active" : ""}`,
@@ -3670,7 +3771,7 @@ function GeneralKartePage({
       onSelect: did => {
         updateDrugRow(i, "drugId", did);
         const nd = drugsMaster.find(x => x.id === Number(did));
-        if (nd) updateDrugRow(i, "dose", String(nd.defaultDose));
+        if (nd && !row.dose) updateDrugRow(i, "dose", nd.defaultDose != null && nd.defaultDose !== "" ? String(nd.defaultDose) : "1");
       }
     }), drugRows.length > 1 && /*#__PURE__*/React.createElement("button", {
       onClick: () => removeDrugRow(i),
@@ -8535,8 +8636,26 @@ function DashboardPage({
   onOpenCase,
   onCloseCase
 }) {
-  const contCases = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D");
+  const contCasesAll = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D" && !c.archived);
   const todayStr = todayJST();
+  const lastVisitOf = c => (c.visits || []).reduce((mx, v) => (v.date || "") > mx ? v.date : mx, c.openDate || "");
+  const STALE_DAYS = 60;
+  const contStale = contCasesAll.filter(c => daysBetween(lastVisitOf(c), todayStr) > STALE_DAYS).sort((a,b) => lastVisitOf(a).localeCompare(lastVisitOf(b)));
+  const [showStale, setShowStale] = useState(false);
+  const contCases = contCasesAll.filter(c => daysBetween(lastVisitOf(c), todayStr) <= STALE_DAYS).sort((a,b) => lastVisitOf(b).localeCompare(lastVisitOf(a))).concat(showStale ? contStale : []);
+  const monthStat = (() => {
+    const ym = todayStr.slice(0,7); const r = {count:0, gen:0, br:0, ph:0, amt:0};
+    cases.forEach(c => {
+      if (c.archived) return;
+      if (c.type === "一般") (c.visits||[]).forEach(v => { if ((v.date||"").slice(0,7) === ym) { r.count++; r.gen++; r.amt += calcVisitTotal(v, drugsMaster) || 0; } });
+      else if (c.type === "繁殖") (c.findings||[]).forEach(f => { if ((f.date||"").slice(0,7) === ym) { r.count++; r.br++; r.amt += Number(f.totalFee) || 0; } });
+      else if ((c.openDate||"").slice(0,7) === ym) { r.count++; r.ph++; r.amt += calcCaseTotal(c, drugsMaster) || 0; }
+    });
+    return r;
+  })();
+  const [bsFilter, setBsFilter] = useState("");      // 繁殖スケジュールの状態フィルタ
+  const [bsSort, setBsSort] = useState("date");       // date | farm | horse
+  const [bsShowAll, setBsShowAll] = useState(false);  // 期日前（14日より先）も表示
   const todayCases = cases.filter(c => {
     if (c.type === "\u4E00\u822C") return c.visits?.some(v => v.date === todayStr) || c.caseStatus === "\u7D99\u7D9A\u4E2D";
     return c.openDate === todayStr;
@@ -8586,20 +8705,20 @@ function DashboardPage({
   }, {
     icon: "🤱",
     label: "繁殖診療中",
-    value: cases.filter(c => c.type === "繁殖").length + "頭",
-    sub: "シーズン 2026",
+    value: cases.filter(c => c.type === "繁殖" && !c.archived && String(c.season || (c.openDate||"").slice(0,4)) === todayStr.slice(0,4)).length + "頭",
+    sub: "シーズン " + todayStr.slice(0,4),
     color: "#fce7f3"
   }, {
-    icon: "⚠️",
-    label: "未収金",
-    value: "¥1,247,000",
-    sub: "3件の滞納あり",
+    icon: "🗓️",
+    label: "今月の診療回数",
+    value: monthStat.count + "回",
+    sub: "一般 " + monthStat.gen + "・繁殖 " + monthStat.br + "・薬事 " + monthStat.ph,
     color: "#fee2e2"
   }, {
     icon: "📈",
-    label: "今月売上",
-    value: "¥4,280,000",
-    sub: "前月比 +12%",
+    label: "今月診療額（税抜・概算）",
+    value: "¥" + monthStat.amt.toLocaleString(),
+    sub: "確定額は請求画面で",
     color: "#dcfce7"
   }].map((s, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
@@ -8658,7 +8777,10 @@ function DashboardPage({
       color: "#1e40af",
       display: "flex", justifyContent: "space-between", alignItems: "center"
     }
-  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDD04 \u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B"), /*#__PURE__*/React.createElement("span", { className: "badge badge-blue" }, contCases.length + "\u4EF6")), /*#__PURE__*/React.createElement("div", { style: { maxHeight: 460, overflowY: "auto" } }, contCases.length === 0 && /*#__PURE__*/React.createElement("div", { style: { padding: "20px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 } }, "\u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B\u306F\u3042\u308A\u307E\u305B\u3093"), contCases.map(c => {
+  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDD04 \u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B"), /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", fontSize: 11, fontWeight: 400 } },
+      /*#__PURE__*/React.createElement("span", { className: "badge badge-blue" }, contCasesAll.length + "\u4EF6"),
+      contStale.length > 0 && /*#__PURE__*/React.createElement("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: () => setShowStale(!showStale), title: STALE_DAYS + "日以上診療のない継続中カルテ（FMの継続状態が残っているもの）" }, (showStale ? "▾ " : "▸ ") + STALE_DAYS + "日以上なし " + contStale.length + "件"),
+      showStale && contStale.length > 0 && onCloseCase && /*#__PURE__*/React.createElement("button", { className: "btn btn-sm", style: { fontSize: 11, background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca" }, onClick: () => { if (confirm(STALE_DAYS + "日以上診療のない継続中カルテ " + contStale.length + "件をまとめて「診療終了」にしますか？\n（カルテ自体は残ります）")) { contStale.forEach(c => onCloseCase(c)); showToast(contStale.length + "件を診療終了にしました"); setShowStale(false); } } }, "まとめて終了"))), /*#__PURE__*/React.createElement("div", { style: { maxHeight: 460, overflowY: "auto" } }, contCases.length === 0 && /*#__PURE__*/React.createElement("div", { style: { padding: "20px 16px", textAlign: "center", color: "#9ca3af", fontSize: 13 } }, "\u7D99\u7D9A\u4E2D\u306E\u75C7\u4F8B\u306F\u3042\u308A\u307E\u305B\u3093"), contCases.map(c => {
     const h = horses.find(x => x.id === c.horseId);
     const f = h ? farms.find(x => x.id === h.farmId) : null;
     const total = calcCaseTotal(c, drugsMaster);
@@ -8700,157 +8822,53 @@ function DashboardPage({
       onClick: () => { if (onCloseCase && confirm((h?.name || "") + " \u306E\u300C" + (c.diagnosis || "") + "\u300D\u3092\u8A3A\u7642\u7D42\u4E86\u306B\u3057\u3066\u7D99\u7D9A\u4E2D\u304B\u3089\u5916\u3057\u307E\u3059\u304B\uFF1F\n\uFF08\u30AB\u30EB\u30C6\u306F\u6B8B\u308A\u307E\u3059\u3002\u30AB\u30EB\u30C6\u4E00\u89A7\u304B\u3089\u623B\u305B\u307E\u3059\uFF09")) onCloseCase(c); }
     }, "\u7D42\u4E86"));
   }))), (() => {
-    // ═══ 繁殖スケジュール ═══
-    const brCases = cases.filter(c => c.type === "繁殖");
-    const today = new Date(); const todayS = today.toISOString().slice(0,10);
-    const addDays = (ds, n) => { const d = new Date(ds); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
-    const parseScheduleDays = (s) => { if(!s) return null; if(/^pg/i.test(s.trim())) return null; const m = s.match(/(\d+)/); return m ? parseInt(m[1],10) : null; };
-    const schedItems = [];
-    brCases.forEach(c => {
+    // ═══ 繁殖スケジュール（ルールは breedingNextEvent 参照）═══
+    const todayS = todayJST();
+    const curSeason = Number(todayS.slice(0,4));
+    const brCases = cases.filter(c => c.type === "繁殖" && !c.archived && (Number(c.season) || Number((c.openDate||"").slice(0,4))) === curSeason);
+    const schedAll = brCases.map(c => {
       const h = horses.find(x => x.id === c.horseId);
-      const f = h ? farms.find(x => x.id === h.farmId) : null;
-      const hName = h?.name || "—"; const fName = f?.name || "";
-      const insDays = c.inseminationDate ? daysBetween(c.inseminationDate, todayS) : -1;
-      const bst = c.breedingStatus || "";
-      const newestWithSched = (c.findings || []).find(fi => fi.schedule && fi.schedule.trim());
-      const schedRaw = newestWithSched?.schedule || "";
-      const schedDays = parseScheduleDays(schedRaw);
-
-      // ─── 継続中: 次回予定（scheduleテキスト・未来finding日付）が重要 ───
-      if (bst === "継続中" || bst === "" || bst === "配合しない") {
-        // scheduleフィールドにPG3等のテキストがあれば「次回」として表示
-        if (newestWithSched) {
-          // 未来日付のfindingがあればその日付を使う
-          const futureF = (c.findings || []).find(fi => fi.date > todayS);
-          if (futureF) {
-            const diff = daysBetween(todayS, futureF.date);
-            if (diff <= 14) {
-              schedItems.push({date: futureF.date, horse: hName, farm: fName, type: "次回", detail: schedRaw+" ("+diff+"日後)", color: "#2563eb", caseId: c.id, c: c, priority: 1});
-            }
-          }
-        }
-        // 未来日付findingのみ（scheduleテキスト無し）
-        (c.findings || []).forEach(fi => {
-          if (fi.date > todayS && fi.date <= addDays(todayS, 14)) {
-            const already = schedItems.some(s => s.caseId === c.id);
-            if (!already) {
-              const diff = daysBetween(todayS, fi.date);
-              schedItems.push({date: fi.date, horse: hName, farm: fName, type: fi.memo || "次回", detail: diff+"日後", color: "#2563eb", caseId: c.id, c: c, priority: 2});
-            }
-          }
-        });
-      }
-
-      // ─── 種付中/不受胎: 妊娠鑑定日が最重要 ───
-      if (bst === "種付中" || bst === "不受胎") {
-        // 1) scheduleフィールドに日数指定があればそれ優先（種付日+N日）
-        if (schedDays && c.inseminationDate) {
-          const schedDate = addDays(c.inseminationDate, schedDays);
-          const diff = daysBetween(todayS, schedDate);
-          if (diff >= -30 && diff <= 14) {
-            const lbl = diff === 0 ? "本日" : diff < 0 ? Math.abs(diff)+"日超過" : diff+"日後";
-            schedItems.push({date: schedDate, horse: hName, farm: fName, type: "妊鑑", detail: "種付"+schedDays+"day ("+lbl+")", color: diff<=0?"#dc2626":"#7c3aed", caseId: c.id, c: c, priority: diff<=0?0:1});
-          }
-        }
-        // 2) schedule指定なし → 自動で種付日+16日を鑑定基準日とする
-        if (c.inseminationDate && insDays >= 13 && !schedItems.some(s => s.caseId === c.id)) {
-          const d16 = addDays(c.inseminationDate, 16);
-          const lbl = insDays >= 16 ? "種付"+insDays+"日目 ⚠超過" : "種付"+insDays+"日目";
-          schedItems.push({date: d16, horse: hName, farm: fName, type: "妊鑑", detail: lbl, color: "#dc2626", caseId: c.id, c: c, priority: 0});
-        }
-        // 3) 未来findingも表示（鑑定予定行など）
-        (c.findings || []).forEach(fi => {
-          if (fi.date > todayS && fi.date <= addDays(todayS, 14)) {
-            const already = schedItems.some(s => s.caseId === c.id && s.date === fi.date);
-            if (!already) {
-              const diff = daysBetween(todayS, fi.date);
-              schedItems.push({date: fi.date, horse: hName, farm: fName, type: fi.memo || "鑑定予定", detail: diff+"日後", color: "#f59e0b", caseId: c.id, c: c, priority: 2});
-            }
-          }
-        });
-      }
-
-      // ─── 受胎: マイルストーン再鑑定日（28/35/49/63日目）───
-      if (bst === "受胎" && c.inseminationDate) {
-        var milestones = [28, 35, 49, 63];
-        var bestMilestone = null;
-        for (var mi = 0; mi < milestones.length; mi++) {
-          var mDate = addDays(c.inseminationDate, milestones[mi]);
-          var mDiff = daysBetween(todayS, mDate);
-          // 過去30日〜未来30日の範囲で次のマイルストーンを探す
-          if (mDiff >= -30 && mDiff <= 30) {
-            if (!bestMilestone || (bestMilestone.diff < 0 && mDiff >= 0) || (bestMilestone.diff < 0 && mDiff > bestMilestone.diff) || (bestMilestone.diff >= 0 && mDiff >= 0 && mDiff < bestMilestone.diff)) {
-              bestMilestone = {date: mDate, days: milestones[mi], diff: mDiff};
-            }
-          }
-        }
-        if (bestMilestone) {
-          var lbl = bestMilestone.diff === 0 ? "本日！" : bestMilestone.diff < 0 ? Math.abs(bestMilestone.diff)+"日超過" : bestMilestone.diff+"日後";
-          var col = bestMilestone.diff <= 0 ? "#dc2626" : bestMilestone.diff <= 3 ? "#f59e0b" : "#7c3aed";
-          schedItems.push({date: bestMilestone.date, horse: hName, farm: fName, type: "再鑑定", detail: "胎齢"+bestMilestone.days+"日目 ("+lbl+")", color: col, caseId: c.id, c: c, priority: bestMilestone.diff<=0?0:1});
-        }
-        // 未来findingも（マイルストーン以外の予定）
-        (c.findings || []).forEach(fi => {
-          if (fi.date > todayS && fi.date <= addDays(todayS, 14)) {
-            var already = schedItems.some(s => s.caseId === c.id && s.date === fi.date);
-            if (!already) {
-              var fdiff = daysBetween(todayS, fi.date);
-              schedItems.push({date: fi.date, horse: hName, farm: fName, type: fi.memo || "診察予定", detail: fdiff+"日後", color: "#2563eb", caseId: c.id, c: c, priority: 2});
-            }
-          }
-        });
-      }
+      const f = (c.farmId && farms.find(x => x.id === Number(c.farmId))) || (h ? farms.find(x => x.id === h.farmId) : null);
+      const ev = breedingNextEvent(c, todayS);
+      return Object.assign({horse: h?.name || "—", farm: f?.name || "", caseId: c.id, c: c}, ev);
     });
-    // Deduplicate by caseId, keep highest priority (lowest number)
-    const bestByCase = {};
-    schedItems.forEach(s => {
-      const k = s.caseId;
-      if (!bestByCase[k] || (s.priority||9) < (bestByCase[k].priority||9)) bestByCase[k] = s;
-      else if ((s.priority||9) === (bestByCase[k].priority||9) && s.date < bestByCase[k].date) bestByCase[k] = s;
-    });
-    const allItems = Object.values(bestByCase);
-    // カテゴリ: 妊鑑（種付中の鑑定）、再鑑定（受胎の再チェック）、その他（次回予定等）
-    const kanteiItems = allItems.filter(s => s.type === "妊鑑");
-    const ninkItems = allItems.filter(s => s.type === "再鑑定");
-    const otherItems = allItems.filter(s => s.type !== "妊鑑" && s.type !== "再鑑定");
-    // 各カテゴリで本日→未来→超過
-    const sortGroup = (items) => {
-      const t = items.filter(s => s.date === todayS);
-      const u = items.filter(s => s.date > todayS).sort((a,b) => a.date.localeCompare(b.date));
-      const o = items.filter(s => s.date < todayS).sort((a,b) => b.date.localeCompare(a.date));
-      return [...t, ...u, ...o];
-    };
-    const sortedKantei = sortGroup(kanteiItems);
-    const sortedNink = sortGroup(ninkItems);
-    const sortedOther = sortGroup(otherItems);
-    // 鑑定: 本日+翌日+超過5件、妊鑑: 全件、その他: 5件
-    const showKantei = sortedKantei.slice(0, 15);
-    const showNink = sortedNink.slice(0, 20);
-    const showOther = sortedOther.slice(0, 5);
-    const uniq = [...showKantei, ...showNink, ...showOther];
-    // サマリ
-    const kanteiSoon = brCases.filter(c => {
-      if (!c.inseminationDate) return false;
-      if (c.breedingStatus !== "種付中" && c.breedingStatus !== "不受胎") return false;
-      const d = daysBetween(c.inseminationDate, todayS);
-      return d >= 13 && d <= 25;
-    });
-    const jutaiCount = brCases.filter(c => c.breedingStatus === "受胎").length;
-    const tanefukiCount = brCases.filter(c => c.breedingStatus === "種付中").length;
-    const futaijutaiCount = brCases.filter(c => c.breedingStatus === "不受胎").length;
+    const cnt = {"種付中":0,"受胎":0,"不受胎":0,"継続中":0};
+    schedAll.forEach(x => { if (cnt[x.status] !== undefined) cnt[x.status]++; });
+    const overdue = schedAll.filter(x => x.date && x.diff < 0 && (x.type === "妊鑑" || x.type === "次発情"));
+    const uniq = schedAll
+      .filter(x => x.date)
+      .filter(x => !bsFilter || x.status === bsFilter)
+      .filter(x => bsShowAll || x.diff <= 14)
+      .sort((a,b) => bsSort === "farm" ? (a.farm.localeCompare(b.farm,"ja") || a.date.localeCompare(b.date))
+                   : bsSort === "horse" ? a.horse.localeCompare(b.horse,"ja")
+                   : (a.date.localeCompare(b.date) || a.farm.localeCompare(b.farm,"ja")));
+    const chip = (label, val, cls) => /*#__PURE__*/React.createElement("button", {
+      key: label, onClick: () => setBsFilter(bsFilter === val ? "" : val),
+      className: "badge " + cls,
+      style: {cursor:"pointer", border: bsFilter === val ? "2px solid #111827" : "2px solid transparent", opacity: (!bsFilter || bsFilter === val) ? 1 : 0.45}
+    }, label);
+    const sortBtn = (label, val) => /*#__PURE__*/React.createElement("button", {
+      key: val, onClick: () => setBsSort(val),
+      style: {fontSize:11, padding:"2px 8px", borderRadius:6, border:"1px solid #e5e7eb", background: bsSort === val ? "#111827" : "#fff", color: bsSort === val ? "#fff" : "#374151", cursor:"pointer"}
+    }, label);
     return /*#__PURE__*/React.createElement("div", {className:"card", style:{marginBottom:0,overflow:"hidden"}},
       /*#__PURE__*/React.createElement("div", {style:{padding:"10px 14px",borderBottom:"1px solid #f3f4f6",fontWeight:700,fontSize:14,background:"#fdf2f8",color:"#9d174d",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}},
-        /*#__PURE__*/React.createElement("span", null, "🤱 繁殖スケジュール"),
-        /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,fontSize:11}},
-          /*#__PURE__*/React.createElement("span", {className:"badge badge-pink"}, "種付中 "+tanefukiCount),
-          /*#__PURE__*/React.createElement("span", {className:"badge badge-purple"}, "受胎 "+jutaiCount),
-          futaijutaiCount > 0 && /*#__PURE__*/React.createElement("span", {className:"badge badge-red"}, "不受胎 "+futaijutaiCount),
-          kanteiSoon.length > 0 && /*#__PURE__*/React.createElement("span", {style:{background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:6,fontWeight:700}}, "⚠ 鑑定時期 "+kanteiSoon.length+"頭")
+        /*#__PURE__*/React.createElement("span", {title:"種付中: 種付+15日(予定欄♂Nday)で妊鑑／不受胎: 判定+4日(予定欄pgN)で次発情チェック／受胎: 予定欄の胎齢日 or 28→35→49→63日／継続中: 最終診察+予定欄N日"}, "🤱 繁殖スケジュール ", /*#__PURE__*/React.createElement("span", {style:{fontSize:11,fontWeight:400,color:"#9d174d"}}, curSeason + "シーズン")),
+        /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:6,fontSize:11,alignItems:"center",flexWrap:"wrap"}},
+          chip("種付中 "+cnt["種付中"], "種付中", "badge-pink"),
+          chip("受胎 "+cnt["受胎"], "受胎", "badge-purple"),
+          chip("不受胎 "+cnt["不受胎"], "不受胎", "badge-red"),
+          chip("継続中 "+cnt["継続中"], "継続中", "badge-blue"),
+          overdue.length > 0 && /*#__PURE__*/React.createElement("span", {style:{background:"#fee2e2",color:"#991b1b",padding:"2px 8px",borderRadius:6,fontWeight:700}}, "⚠ 期日超過 "+overdue.length+"頭"),
+          /*#__PURE__*/React.createElement("span", {style:{width:1,height:16,background:"#e5e7eb",margin:"0 2px"}}),
+          sortBtn("日付順","date"), sortBtn("牧場順","farm"), sortBtn("馬名順","horse"),
+          /*#__PURE__*/React.createElement("label", {style:{display:"flex",alignItems:"center",gap:3,fontWeight:400,color:"#6b7280",cursor:"pointer"}},
+            /*#__PURE__*/React.createElement("input", {type:"checkbox", checked: bsShowAll, onChange: e => setBsShowAll(e.target.checked)}), "先の予定も")
         )
       ),
       /*#__PURE__*/React.createElement("div", {style:{maxHeight:460,overflowY:"auto"}}, uniq.length === 0
         ? /*#__PURE__*/React.createElement("div", {style:{padding:"20px 16px",textAlign:"center",color:"#9ca3af",fontSize:13}}, "直近の繁殖スケジュールはありません")
-        : uniq.slice(0,30).map((s,i) => {
+        : uniq.slice(0,60).map((s,i) => {
             const dateObj = new Date(s.date+"T00:00:00");
             const mm = dateObj.getMonth()+1; const dd = dateObj.getDate();
             const wd = ["日","月","火","水","木","金","土"][dateObj.getDay()];
@@ -8858,12 +8876,12 @@ function DashboardPage({
             const isPast = s.date < todayS;
             return /*#__PURE__*/React.createElement("div", {key:i, style:{padding:"6px 12px",borderBottom:"1px solid #f9fafb",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:isToday?"#fffbeb":isPast?"#fef2f2":"#fff"}, onClick:()=>onOpenCase(s.c)},
               /*#__PURE__*/React.createElement("span", {style:{fontSize:12,fontWeight:700,color:isToday?"#d97706":isPast?"#dc2626":"#374151",minWidth:65}}, mm+"/"+dd+"("+wd+")"),
-              /*#__PURE__*/React.createElement("span", {style:{fontSize:11,padding:"2px 8px",borderRadius:6,background:s.type==="妊鑑"?"#fee2e2":s.type==="再鑑定"?"#ede9fe":s.type==="次回"?"#dbeafe":"#f3f4f6",color:s.type==="妊鑑"?"#991b1b":s.type==="再鑑定"?"#5b21b6":s.type==="次回"?"#1e40af":"#374151",fontWeight:600}}, s.type),
+              /*#__PURE__*/React.createElement("span", {style:{fontSize:11,padding:"2px 8px",borderRadius:6,background:s.type==="妊鑑"?"#fee2e2":s.type==="次発情"?"#ffedd5":s.type==="再鑑定"?"#ede9fe":s.type==="次回"?"#dbeafe":"#f3f4f6",color:s.type==="妊鑑"?"#991b1b":s.type==="次発情"?"#9a3412":s.type==="再鑑定"?"#5b21b6":s.type==="次回"?"#1e40af":"#374151",fontWeight:600}}, s.type),
               /*#__PURE__*/React.createElement("div", {style:{flex:1}},
                 /*#__PURE__*/React.createElement("span", {style:{fontSize:13,fontWeight:600}}, s.horse),
                 /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#6b7280",marginLeft:6}}, s.farm)
               ),
-              /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:s.color,fontWeight:600}}, s.detail)
+              /*#__PURE__*/React.createElement("span", {title:s.rule||"", style:{fontSize:11,color:s.diff<0?"#dc2626":s.diff===0?"#d97706":s.diff<=3?"#b45309":"#374151",fontWeight:600}}, s.detail)
             );
           }))
     );
