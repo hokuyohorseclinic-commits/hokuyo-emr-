@@ -1304,6 +1304,30 @@ function parseBreedingSched(str){
   if((m=t.match(/^(\d+)$/))) return {kind:"ges",days:+m[1]};            // 28 = 胎齢28日
   return null;
 }
+// ═══ 繁殖: シーズン・前シーズン情報 ═══
+function breedingSeasonOf(c){ return Number(c.season) || Number((c.openDate||"").slice(0,4)) || 0; }
+// その馬の「指定シーズンより前」の直近の繁殖カルテ
+function prevSeasonCase(cases, horseId, season){
+  var best=null;
+  (cases||[]).forEach(function(c){
+    if(c.type!=="繁殖"||c.archived||Number(c.horseId)!==Number(horseId)) return;
+    var sy=breedingSeasonOf(c); if(!sy||sy>=season) return;
+    if(!best||sy>breedingSeasonOf(best)) best=c;
+  });
+  return best;
+}
+// 前シーズンの結果をまとめる（一覧の「前年」列・繰越・カルテ上部の表示に使う）
+function prevSeasonInfo(c, cases){
+  if(c.prevSeason&&c.prevSeason.season) return c.prevSeason;
+  var pc=prevSeasonCase(cases, c.horseId, breedingSeasonOf(c)||9999);
+  if(!pc) return null;
+  var e=breedingEffective(pc);
+  var st=e.status;
+  var result= st==="受胎"?"受胎": st==="不受胎"?"不受胎": (e.insDate?"未判定":"未種付");
+  if(pc.breedingStatus==="配合しない") result="配合しない";
+  return {season:breedingSeasonOf(pc), result:result, insDate:e.insDate||"", stallion:pc.stallion||"", judgeDate:e.judgeDate||"", caseId:pc.id, foalingDate:pc.foalingDate||""};
+}
+function addDaysStr(ds,n){var d=new Date(ds+"T00:00:00");d.setDate(d.getDate()+n);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 function breedingEffective(c, todayS){
   var fs=(c.findings||[]).slice().sort(function(a,b){return (a.date||"").localeCompare(b.date||"");});
   var lastIns="",lastJudge="",judge="",lastDate="";
@@ -1315,12 +1339,13 @@ function breedingEffective(c, todayS){
     if(f.concep){lastJudge=f.date;judge="+";}
     if(f.notConcep){lastJudge=f.date;judge="-";}
   });
-  var insDate=lastIns||c.inseminationDate||"";
+  var manual=(c.breedingStatus==="受胎"||c.breedingStatus==="不受胎"||c.breedingStatus==="種付中");
+  var insDate=lastIns||(manual?(c.inseminationDate||""):"");
   var st;
   if(judge==="+") st="受胎";
   else if(judge==="-") st="不受胎";
   else if(lastIns) st="種付中";
-  else st=(c.breedingStatus==="受胎"||c.breedingStatus==="不受胎"||c.breedingStatus==="種付中")?c.breedingStatus:"継続中";
+  else st=manual?c.breedingStatus:"継続中";
   if(c.breedingStatus==="配合しない"||c.breedingStatus==="診療終了"||c.breedingStatus==="終了") st=c.breedingStatus;
   return {status:st,insDate:insDate,judgeDate:lastJudge,lastDate:lastDate,findings:fs};
 }
@@ -1335,7 +1360,16 @@ function breedingNextEvent(c, todayS){
   var fut=fs.filter(function(f){return f.date>todayS;})[0];
   if(fut){var fd=daysBetween(todayS,fut.date);return {status:e.status,date:fut.date,type:"予定",detail:(fut.schedule||fut.memo||"")+" ("+fd+"日後)",diff:fd,rule:"手入力の予定行"};}
   var st=e.status, target=null, type="", detail="", rule="";
-  if(st==="種付中"&&e.insDate){
+  var prev=c.prevSeason||null;
+  if(st==="継続中"&&!e.insDate&&!c.foalingDate&&prev&&prev.result==="受胎"&&prev.insDate){
+    // 前年受胎・未出産 → 分娩予定（種付+340日）
+    target=addDaysStr(prev.insDate,340); type="分娩予定"; rule="前年種付"+prev.insDate.slice(5).replace("-","/")+"+340日";
+    var dd=daysBetween(prev.insDate,todayS); detail="妊娠"+dd+"日（"+rule+"）";
+  } else if(st==="継続中"&&c.foalingDate&&(!last||last.date<c.foalingDate)){
+    // 出産後、所見なし → 産後チェック（出産+7日）
+    target=addDaysStr(c.foalingDate,7); type="産後"; rule="出産+7日";
+    detail="生後"+daysBetween(c.foalingDate,todayS)+"日（"+rule+"）";
+  } else if(st==="種付中"&&e.insDate){
     var n=(sched&&sched.kind==="ins")?sched.days:(sched&&sched.kind==="rel"&&last.date===e.insDate)?sched.days:15;
     target=addD(e.insDate,n); type="妊鑑"; rule="種付日+"+n+"日";
     var d1=daysBetween(e.insDate,todayS);
@@ -1360,7 +1394,7 @@ function breedingNextEvent(c, todayS){
   }
   if(!target) return {status:st,date:null};
   var diff=daysBetween(todayS,target);
-  var keep = type==="妊鑑" ? 60 : type==="次発情" ? 30 : 21;   // 超過後も載せておく日数
+  var keep = type==="妊鑑" ? 60 : type==="次発情" ? 30 : type==="分娩予定" ? 45 : 21;   // 超過後も載せておく日数
   if(diff < -keep) return {status:st,date:null,dropped:true};
   return {status:st,date:target,type:type,detail:detail+" "+lbl(diff),diff:diff,rule:rule};
 }
@@ -4179,7 +4213,14 @@ function BreedingListPage({
       }
       return {label: "", date: "", color: ""};
     };
-    const smartSched = computeSmartSchedule();
+    const smartSched = (() => {
+      const ev = breedingNextEvent(c, today);
+      if (!ev.date) return computeSmartSchedule();
+      const dd = new Date(ev.date + "T00:00:00");
+      const lbl = (dd.getMonth()+1) + "/" + dd.getDate() + " " + ev.type + (ev.diff < 0 ? "(" + Math.abs(ev.diff) + "日超過)" : ev.diff === 0 ? " 本日" : ev.diff <= 3 ? " " + ev.diff + "日後" : "");
+      return {label: lbl, date: ev.date, color: ev.diff < 0 ? "#dc2626" : ev.diff === 0 ? "#d97706" : ev.diff <= 3 ? "#b45309" : ev.type === "再鑑定" ? "#7c3aed" : "#059669"};
+    })();
+    const prevInfo = prevSeasonInfo(c, cases);
     // nextDate for sorting (従来互換)
     const nextDate = smartSched.date || schedExam || ((c.findings || []).find(fi => fi.date && fi.date > today)?.date) || null;
     const lastFindingDate = lastFinding?.date || null;
@@ -4203,6 +4244,7 @@ function BreedingListPage({
       lastSchedule: smartSched.label,
       lastScheduleColor: smartSched.color,
       situation,
+      prevInfo,
       nextDate,
       nextScheduleLabel: smartSched.label,
       lastFindingDate
@@ -4257,6 +4299,9 @@ function BreedingListPage({
         break;
       case "bstatus":
         v = (a.c.breedingStatus || "").localeCompare(b.c.breedingStatus || "");
+        break;
+      case "prev":
+        v = ((a.prevInfo && a.prevInfo.result) || "ｚ").localeCompare((b.prevInfo && b.prevInfo.result) || "ｚ") || ((a.prevInfo && a.prevInfo.insDate) || "").localeCompare((b.prevInfo && b.prevInfo.insDate) || "");
         break;
       case "schedule":
         v = (a.lastSchedule || "").localeCompare(b.lastSchedule || "");
@@ -4614,42 +4659,60 @@ function BreedingListPage({
     }}, "一括アーカイブ"),
     /*#__PURE__*/React.createElement("button", {style:{background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:12},onClick:()=>setSelectedIds([])}, "選択解除")
   ),
-  // ── 年度繰越ダイアログ ──
-  showCarryoverDialog && /*#__PURE__*/React.createElement("div", {style:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"},onClick:()=>setShowCarryoverDialog(false)},
-    /*#__PURE__*/React.createElement("div", {style:{background:"#fff",borderRadius:12,padding:24,maxWidth:520,width:"90%",maxHeight:"80vh",overflow:"auto"},onClick:e=>e.stopPropagation()},
-      /*#__PURE__*/React.createElement("h2", {style:{fontSize:18,fontWeight:700,marginBottom:12}}, "年度繰越"),
-      /*#__PURE__*/React.createElement("p", {style:{fontSize:13,color:"#374151",marginBottom:12}}, "��シーズンへ繰り越す馬のステータスを選択してください。妊娠中・受胎の馬は��娠情報が引き継がれます。"),
-      /*#__PURE__*/React.createElement("div", {style:{marginBottom:12,fontSize:12,color:"#6b7280"}},
-        "現在のステータス別頭数: ",
-        Object.entries(statusCounts).map(([st,cnt])=>st+"("+cnt+"頭)").join("、")
-      ),
-      /*#__PURE__*/React.createElement("div", {style:{marginBottom:16}},
-        ["妊娠中","受胎","種付中","継続中","子付き","空胎","新規","配合しない","診療終了"].filter(st=>(statusCounts[st]||0)>0).map(st => {
-          const cnt = statusCounts[st] || 0;
-          const defaultOn = ["妊娠中","受胎","種付中","継続中","子付き","新規"].includes(st);
-          return /*#__PURE__*/React.createElement("label", {key:st,style:{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",background:defaultOn?"#eff6ff":"#f9fafb",borderRadius:8,fontSize:13,cursor:"pointer",marginBottom:4,border:defaultOn?"1px solid #93c5fd":"1px solid #e5e7eb"}},
-            /*#__PURE__*/React.createElement("input", {type:"checkbox","data-carry-st":st,defaultChecked:defaultOn}),
-            /*#__PURE__*/React.createElement("span", {style:{fontWeight:600}}, st),
-            /*#__PURE__*/React.createElement("span", {style:{color:"#6b7280"}}, "（"+cnt+"頭）")
-          );
-        })
-      ),
-      /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,justifyContent:"flex-end"}},
+  // ── 年度繰越ダイアログ（牧場ごとに馬を選んで翌シーズンへ）──
+  showCarryoverDialog && (() => {
+    const nextYear = bSeason + 1;
+    const alreadyNext = new Set(cases.filter(c => c.type === "繁殖" && !c.archived && breedingSeasonOf(c) === nextYear).map(c => Number(c.horseId)));
+    const rows = breedingCases.map(c => {
+      const h = horses.find(x => x.id === c.horseId);
+      const f = (c.farmId && farms.find(x => x.id === Number(c.farmId))) || (h ? farms.find(x => x.id === h.farmId) : null);
+      const e = breedingEffective(c);
+      const result = e.status === "受胎" ? "受胎" : e.status === "不受胎" ? "不受胎" : (e.insDate ? "未判定" : "未種付");
+      const excluded = c.breedingStatus === "配合しない" || c.breedingStatus === "診療終了" || alreadyNext.has(Number(c.horseId));
+      return { c: Object.assign({}, c, { inseminationDate: e.insDate || c.inseminationDate || "" }), h, f, result, excluded, done: alreadyNext.has(Number(c.horseId)) };
+    }).sort((a,b) => (a.f?.name || "").localeCompare(b.f?.name || "", "ja") || (a.h?.name || "").localeCompare(b.h?.name || "", "ja"));
+    const byFarm = {};
+    rows.forEach(r => { const k = r.f?.name || "（牧場未設定）"; (byFarm[k] = byFarm[k] || []).push(r); });
+    const resCol = { "受胎": "badge-purple", "不受胎": "badge-red", "未判定": "badge-pink", "未種付": "badge-gray" };
+    const cnt = {}; rows.forEach(r => { cnt[r.result] = (cnt[r.result] || 0) + 1; });
+    return /*#__PURE__*/React.createElement("div", {style:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"},onClick:()=>setShowCarryoverDialog(false)},
+    /*#__PURE__*/React.createElement("div", {style:{background:"#fff",borderRadius:12,padding:24,maxWidth:720,width:"94%",maxHeight:"86vh",display:"flex",flexDirection:"column"},onClick:e=>e.stopPropagation()},
+      /*#__PURE__*/React.createElement("h2", {style:{fontSize:18,fontWeight:700,marginBottom:6}}, bSeason + " → " + nextYear + " シーズン 年度繰越"),
+      /*#__PURE__*/React.createElement("p", {style:{fontSize:12,color:"#374151",marginBottom:8,lineHeight:1.6}},
+        "チェックした馬を " + nextYear + " シーズンのカルテとして作ります。前年受胎→「子付き」（分娩予定を表示）、不受胎・未種付→「空胎」。前年の種付日・結果はカルテ上部と一覧の「前年」列に残り、所見は前年カルテで参照できます。いなくなった馬・来ない牧場はチェックを外してください。"),
+      /*#__PURE__*/React.createElement("div", {style:{fontSize:12,color:"#6b7280",marginBottom:8,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}},
+        Object.keys(cnt).map(k => /*#__PURE__*/React.createElement("span", {key:k, className:"badge " + (resCol[k] || "badge-gray")}, k + " " + cnt[k])),
+        /*#__PURE__*/React.createElement("span", {style:{marginLeft:"auto",display:"flex",gap:6}},
+          /*#__PURE__*/React.createElement("button", {className:"btn btn-sm btn-secondary", onClick:()=>{ document.querySelectorAll("[data-carry-id]").forEach(cb => { if (!cb.disabled) cb.checked = true; }); }}, "全てON"),
+          /*#__PURE__*/React.createElement("button", {className:"btn btn-sm btn-secondary", onClick:()=>{ document.querySelectorAll("[data-carry-id]").forEach(cb => { cb.checked = false; }); }}, "全てOFF"))),
+      /*#__PURE__*/React.createElement("div", {style:{overflowY:"auto",flex:1,border:"1px solid #e5e7eb",borderRadius:8}},
+        Object.keys(byFarm).map(fn => /*#__PURE__*/React.createElement("div", {key:fn},
+          /*#__PURE__*/React.createElement("div", {style:{padding:"6px 10px",background:"#f3f4f6",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:8,position:"sticky",top:0}},
+            /*#__PURE__*/React.createElement("input", {type:"checkbox", defaultChecked:true, title:"この牧場をまとめてON/OFF", onChange:e=>{ document.querySelectorAll("[data-carry-farm='" + fn.replace(/'/g,"") + "']").forEach(cb => { if (!cb.disabled) cb.checked = e.target.checked; }); }}),
+            fn, /*#__PURE__*/React.createElement("span", {style:{color:"#6b7280",fontWeight:400}}, byFarm[fn].length + "頭")),
+          byFarm[fn].map(r => /*#__PURE__*/React.createElement("label", {key:r.c.id, style:{display:"flex",alignItems:"center",gap:8,padding:"4px 12px",fontSize:13,borderBottom:"1px solid #f9fafb",opacity:r.excluded?0.5:1,cursor:"pointer"}},
+            /*#__PURE__*/React.createElement("input", {type:"checkbox", "data-carry-id":r.c.id, "data-carry-farm":fn.replace(/'/g,""), defaultChecked:!r.excluded, disabled:r.done}),
+            /*#__PURE__*/React.createElement("span", {style:{fontWeight:600,minWidth:160}}, r.h?.name || "—"),
+            /*#__PURE__*/React.createElement("span", {className:"badge " + (resCol[r.result] || "badge-gray")}, r.result),
+            r.c.inseminationDate && /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#6b7280"}}, "種付 " + r.c.inseminationDate.slice(5).replace("-","/")),
+            r.c.stallion && /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#6b7280"}}, "♂" + r.c.stallion),
+            r.result === "受胎" && r.c.inseminationDate && /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#92400e"}}, "分娩予定 " + addDaysStr(r.c.inseminationDate, 340).slice(5).replace("-","/")),
+            r.done && /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#059669"}}, nextYear + "年カルテあり"),
+            !r.done && r.excluded && /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#9ca3af"}}, r.c.breedingStatus)))))),
+      /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}},
         /*#__PURE__*/React.createElement("button", {className:"btn",onClick:()=>setShowCarryoverDialog(false)}, "キャンセル"),
         /*#__PURE__*/React.createElement("button", {className:"btn btn-primary",onClick:()=>{
-          const allCbs = document.querySelectorAll("[data-carry-st]");
-          const checked = [...allCbs].filter(cb=>cb.checked).map(cb=>cb.getAttribute("data-carry-st"));
-          if(checked.length===0){alert("繰越対象のステー���スを選択してください");return;}
-          const total = breedingCases.filter(c=>checked.includes(c.breedingStatus||"")).length;
-          const nextYear = new Date().getFullYear() + 1;
-          if(confirm(checked.join("・")+" の "+total+"頭を " + nextYear + " 年シーズンへ繰り越しますか？")){
-            onYearCarryover(checked, nextYear);
+          const ids = [...document.querySelectorAll("[data-carry-id]")].filter(cb=>cb.checked && !cb.disabled).map(cb=>Number(cb.getAttribute("data-carry-id")));
+          if(ids.length===0){alert("繰り越す馬を選択してください");return;}
+          if(confirm(ids.length + "頭を " + nextYear + " シーズンへ繰り越しますか？")){
+            onYearCarryover(ids, nextYear);
             setShowCarryoverDialog(false);
+            setBSeason(nextYear);
           }
-        }}, "繰越実行")
+        }}, "繰越実行（" + nextYear + "）")
       )
     )
-  ),
+  );})(),
   /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -4685,7 +4748,7 @@ function BreedingListPage({
       cursor: "pointer"
     },
     onClick: () => toggleSort("status")
-  }, "\u72B6\u6CC1", arrow("status")), /*#__PURE__*/React.createElement("th", {style:{cursor:"pointer"},onClick:()=>toggleSort("bstatus")}, "\u30B9\u30C6\u30FC\u30BF\u30B9", arrow("bstatus")), /*#__PURE__*/React.createElement("th", {style:{cursor:"pointer"},onClick:()=>toggleSort("schedule")}, "\u4E88\u5B9A", arrow("schedule")), /*#__PURE__*/React.createElement("th", {
+  }, "\u72B6\u6CC1", arrow("status")), /*#__PURE__*/React.createElement("th", {style:{cursor:"pointer"},title:"前シーズンの結果（受胎／不受胎／未種付）と種付日",onClick:()=>toggleSort("prev")}, "\u524D\u5E74", arrow("prev")), /*#__PURE__*/React.createElement("th", {style:{cursor:"pointer"},onClick:()=>toggleSort("bstatus")}, "\u30B9\u30C6\u30FC\u30BF\u30B9", arrow("bstatus")), /*#__PURE__*/React.createElement("th", {style:{cursor:"pointer"},onClick:()=>toggleSort("schedule")}, "\u4E88\u5B9A", arrow("schedule")), /*#__PURE__*/React.createElement("th", {
     style: {
       cursor: "pointer"
     },
@@ -4725,6 +4788,7 @@ function BreedingListPage({
     lastSchedule,
     lastScheduleColor,
     situation,
+    prevInfo,
     nextDate,
     nextScheduleLabel,
     lastFindingDate
@@ -4778,7 +4842,10 @@ function BreedingListPage({
     className: `badge badge-${statusColors[situation] || "gray"}`
   }, situation) : /*#__PURE__*/React.createElement("span", {
     className: `badge badge-${statusColors[c.breedingStatus] || "gray"}`
-  }, c.breedingStatus || "—")), /*#__PURE__*/React.createElement("td", null, (() => {
+  }, c.breedingStatus || "—")), /*#__PURE__*/React.createElement("td", {style:{fontSize:11,whiteSpace:"nowrap"}}, prevInfo ? /*#__PURE__*/React.createElement("div", {title: prevInfo.season + "年: " + prevInfo.result + (prevInfo.insDate ? " 種付" + prevInfo.insDate : "") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : "")},
+    /*#__PURE__*/React.createElement("span", {className:"badge " + ({"受胎":"badge-purple","不受胎":"badge-red","未判定":"badge-pink","配合しない":"badge-gray"}[prevInfo.result] || "badge-gray"), style:{fontSize:10}}, String(prevInfo.season).slice(2) + " " + prevInfo.result),
+    prevInfo.insDate && /*#__PURE__*/React.createElement("div", {style:{color:"#6b7280",fontSize:10}}, "種付 " + prevInfo.insDate.slice(5).replace("-","/") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : ""))
+  ) : /*#__PURE__*/React.createElement("span", {className:"badge badge-green", style:{fontSize:10}}, "新規")), /*#__PURE__*/React.createElement("td", null, (() => {
     const st = c.breedingStatus || "—";
     const stStyles = {
       "受胎":     {bg:"linear-gradient(135deg,#22c55e,#16a34a)",c:"#fff",shadow:"0 2px 8px rgba(34,197,94,0.4)",icon:"✨ "},
@@ -4926,6 +4993,12 @@ function BreedingInputPage({
   });
   const horse = horses.find(h => h.id === Number(selectedHorse));
   const farm = horse ? farms.find(f => f.id === horse.farmId) : null;
+  // 前シーズンのカルテ（参照表示・前年情報の引き継ぎ）
+  const thisSeason = kase ? (breedingSeasonOf(kase) || Number(todayJST().slice(0,4))) : Number(todayJST().slice(0,4));
+  const prevCase = selectedHorse ? prevSeasonCase(cases, Number(selectedHorse), thisSeason) : null;
+  const prevInfo = kase && kase.prevSeason ? kase.prevSeason : (prevCase ? prevSeasonInfo({horseId: Number(selectedHorse), season: thisSeason}, cases) : null);
+  const dupCase = (!kase && selectedHorse) ? cases.find(c => c.type === "繁殖" && !c.archived && Number(c.horseId) === Number(selectedHorse) && breedingSeasonOf(c) === thisSeason) : null;
+  const foalDue = prevInfo && prevInfo.result === "受胎" && prevInfo.insDate ? addDaysStr(prevInfo.insDate, 340) : "";
   const addF = () => setFindings(p => {
     const newF = normalizeFinding({date: todayJST()});
     // 新規行を一番上（最新日付順の先頭）に追加
@@ -5109,7 +5182,9 @@ function BreedingInputPage({
         openDate: kase?.openDate || today,
         vet: kase?.vet || currentVet || "佐藤",
         breedingStatus: bStatus,
-        breedingSituation: bSituation,
+        breedingSituation: bSituation || (kase && kase.breedingSituation) || (prevInfo ? (prevInfo.result === "受胎" ? "子付き" : "空胎") : "上がり"),
+        prevSeason: (kase && kase.prevSeason) || prevInfo || null,
+        season: (kase && kase.season) || thisSeason,
         stallion,
         inseminationDate: insDate,
         foalingDate: foalDate,
@@ -5154,7 +5229,7 @@ function BreedingInputPage({
       color: "#6b7280",
       margin: "4px 0 0"
     }
-  }, "2026\u5E74\u30B7\u30FC\u30BA\u30F3")), /*#__PURE__*/React.createElement("div", {
+  }, thisSeason + "\u5E74\u30B7\u30FC\u30BA\u30F3")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -5256,7 +5331,7 @@ function BreedingInputPage({
       padding: 20,
       marginBottom: 16
     }
-  }, kase && /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:14,marginBottom:14,flexWrap:"wrap"}}, /*#__PURE__*/React.createElement("span", {style:{fontSize:22,fontWeight:800,color:"#111827"}}, horse?.name || "—"), /*#__PURE__*/React.createElement("span", {style:{fontSize:14,color:"#2563eb",fontWeight:600}}, farm?.name || ""), !unlockHorse && /*#__PURE__*/React.createElement("button", {className:"btn btn-secondary btn-sm", title:"入力間違いなどで馬を選び直す", onClick:()=>{ if (confirm("このカルテの馬を変更しますか？\n（入力間違いの修正用。選び直すと自動保存されます）")) setUnlockHorse(true); }}, "馬を変更"), unlockHorse && /*#__PURE__*/React.createElement("div", {style:{minWidth:260}}, /*#__PURE__*/React.createElement(HorseSearchSelect, {horses:horses.filter(h=>!h.sex||h.sex==="牝"),farms:farms,cases:cases,value:selectedHorse,onChange:v=>{ if (v) setSelectedHorse(v); },onAddHorse:onAddHorse,onAddFarm:onAddFarm,defaultSex:"牝"})), (() => { const stCol = {"継続中":"blue","種付中":"pink","受胎":"purple","不受胎":"red"}; return /*#__PURE__*/React.createElement("span", {className:"badge badge-"+(stCol[bStatus]||"gray"),style:{fontSize:12,padding:"4px 10px"}}, bStatus||"—"); })(), bSituation && (() => { const siCol = {"子付き":"orange","空胎":"blue","上がり":"green"}; return /*#__PURE__*/React.createElement("span", {className:"badge badge-"+(siCol[bSituation]||"gray"),style:{fontSize:12,padding:"4px 10px"}}, bSituation); })(), stallion && /*#__PURE__*/React.createElement("span", {style:{fontSize:13,color:"#6b7280"}}, "♂ ", stallion), scheduledExam && /*#__PURE__*/React.createElement("span", {className:"badge badge-purple",style:{fontSize:12,padding:"6px 12px",fontWeight:600}}, "次回予定: ", scheduledExam), !scheduledExam && kase && /*#__PURE__*/React.createElement("span", {className:"badge badge-gray",style:{fontSize:12,padding:"6px 12px"}}, "次回予定: 未設定"), bStatus==="受胎" && insDate && /*#__PURE__*/React.createElement("span", {style:{fontSize:14,fontWeight:700,color:"#5b21b6",background:"#ede9fe",padding:"4px 12px",borderRadius:8,border:"1px solid #7c3aed"}}, "胎齢 ", fetalAge), (bStatus==="種付中" || bStatus==="不受胎") && insDate && daysFromIns >= 0 && /*#__PURE__*/React.createElement("span", {style:{fontSize:14,fontWeight:700,color:daysFromIns>=16?"#fff":"#92400e",background:daysFromIns>=16?"#dc2626":"#fef3c7",padding:"4px 12px",borderRadius:8,border:"1px solid "+(daysFromIns>=16?"#dc2626":"#f59e0b")}}, "種付"+daysFromIns+"日目" + (bStatus==="不受胎" ? "（不受胎）" : daysFromIns>=16 ? " 鑑定時期！" : " → 鑑定まで"+(16-daysFromIns)+"日"))), /*#__PURE__*/React.createElement("div", {style:{display:"grid",gridTemplateColumns: kase ? "1fr 1fr 1fr 1fr 1fr" : "2fr 1fr 1fr 1fr",gap:14,alignItems:"start"}}, kase ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "状態"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",flexWrap:"wrap",gap:3}}, ["継続中","種付中","受胎","不受胎"].map(s => { const sc = {"継続中":{bg:"#dbeafe",bc:"#2563eb",c:"#1e40af"},"種付中":{bg:"#fce7f3",bc:"#ec4899",c:"#9d174d"},"受胎":{bg:"#ede9fe",bc:"#7c3aed",c:"#5b21b6"},"不受胎":{bg:"#fee2e2",bc:"#ef4444",c:"#991b1b"}}; const active = bStatus===s; return /*#__PURE__*/React.createElement("button", {key:s,onClick:()=>setBStatus(s),style:{padding:"4px 8px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid",cursor:"pointer",borderColor:active?sc[s].bc:"#d1d5db",background:active?sc[s].bg:"#fff",color:active?sc[s].c:"#6b7280"}}, s); })) ) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "馬名（検索・新規登録可）"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:6}}, /*#__PURE__*/React.createElement(HorseSearchSelect, {horses:horses.filter(h=>!h.sex||h.sex==="牝"),farms:farms,cases:cases,value:selectedHorse,onChange:v=>{setSelectedHorse(v);if(v){const h=horses.find(x=>x.id===Number(v));if(h)setFilterFarm(String(h.farmId));}},onAddHorse:onAddHorse,onAddFarm:onAddFarm,defaultSex:"牝"})), horse && /*#__PURE__*/React.createElement("div", {style:{fontSize:12,color:"#2563eb",marginTop:4,fontWeight:600}}, horse?.name, " — ", farm?.name), !selectedHorse && /*#__PURE__*/React.createElement("div", {style:{fontSize:12,color:"#dc2626",marginTop:4,fontWeight:700}}, "⚠ 馬名を選ぶまでこのカルテは保存されません") ), kase && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "状況"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",flexWrap:"wrap",gap:3}}, ["子付き","空胎","上がり",""].map(s => { const siCol = {"子付き":{bg:"#fed7aa",bc:"#f97316",c:"#9a3412"},"空胎":{bg:"#dbeafe",bc:"#93c5fd",c:"#1e40af"},"上がり":{bg:"#d1fae5",bc:"#6ee7b7",c:"#065f46"},"":{bg:"#f3f4f6",bc:"#d1d5db",c:"#6b7280"}}; const active = bSituation===s; const label = s || "未設定"; const col = siCol[s] || siCol[""]; return /*#__PURE__*/React.createElement("button", {key:label,onClick:()=>setBSituation(s),style:{padding:"4px 8px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid",cursor:"pointer",borderColor:active?col.bc:"#d1d5db",background:active?col.bg:"#fff",color:active?col.c:"#6b7280"}}, label); }) )), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "種付日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:insDate,onChange:e=>setInsDate(e.target.value)}), insDate && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,marginTop:2}}, /*#__PURE__*/React.createElement("span", {style:{color:"#7c3aed"}}, "胎齢: ", fetalAge), daysFromIns >= 0 && daysFromIns < 15 && /*#__PURE__*/React.createElement("span", {style:{color:"#f59e0b",marginLeft:6}}, "鑑定まで", 16-daysFromIns, "日"), daysFromIns >= 16 && /*#__PURE__*/React.createElement("span", {style:{color:"#dc2626",fontWeight:700,marginLeft:6}}, "鑑定時期！") )), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "出産日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:foalDate,onChange:e=>setFoalDate(e.target.value)}), foalDate && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,color:"#2563eb",marginTop:2}}, "経過: ", daysPost)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "鑑定日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:examDate,onChange:e=>setExamDate(e.target.value)}), scheduledExam && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,color:"#f59e0b",marginTop:2}}, "予定: ", scheduledExam) )), /*#__PURE__*/React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:12}}, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "種牡馬名"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",value:stallion,onChange:e=>setStallion(e.target.value),placeholder:"種牡馬名"}) ), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "繁殖メモ"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",value:note,onChange:e=>setNote(e.target.value),placeholder:"履歴等"}) ))), /*#__PURE__*/React.createElement("div", {className:"breed-two-col"}, /*#__PURE__*/React.createElement("div", {
+  }, kase && /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:14,marginBottom:14,flexWrap:"wrap"}}, /*#__PURE__*/React.createElement("span", {style:{fontSize:22,fontWeight:800,color:"#111827"}}, horse?.name || "—"), /*#__PURE__*/React.createElement("span", {style:{fontSize:14,color:"#2563eb",fontWeight:600}}, farm?.name || ""), !unlockHorse && /*#__PURE__*/React.createElement("button", {className:"btn btn-secondary btn-sm", title:"入力間違いなどで馬を選び直す", onClick:()=>{ if (confirm("このカルテの馬を変更しますか？\n（入力間違いの修正用。選び直すと自動保存されます）")) setUnlockHorse(true); }}, "馬を変更"), unlockHorse && /*#__PURE__*/React.createElement("div", {style:{minWidth:260}}, /*#__PURE__*/React.createElement(HorseSearchSelect, {horses:horses.filter(h=>!h.sex||h.sex==="牝"),farms:farms,cases:cases,value:selectedHorse,onChange:v=>{ if (v) setSelectedHorse(v); },onAddHorse:onAddHorse,onAddFarm:onAddFarm,defaultSex:"牝"})), (() => { const stCol = {"継続中":"blue","種付中":"pink","受胎":"purple","不受胎":"red"}; return /*#__PURE__*/React.createElement("span", {className:"badge badge-"+(stCol[bStatus]||"gray"),style:{fontSize:12,padding:"4px 10px"}}, bStatus||"—"); })(), bSituation && (() => { const siCol = {"子付き":"orange","空胎":"blue","上がり":"green"}; return /*#__PURE__*/React.createElement("span", {className:"badge badge-"+(siCol[bSituation]||"gray"),style:{fontSize:12,padding:"4px 10px"}}, bSituation); })(), prevInfo && /*#__PURE__*/React.createElement("span", {title:"前シーズンの結果。所見は右の「前年の経過」と下の過去記録で参照できます", style:{fontSize:12,padding:"4px 10px",borderRadius:8,background:prevInfo.result==="受胎"?"#ede9fe":prevInfo.result==="不受胎"?"#fee2e2":"#f3f4f6",color:prevInfo.result==="受胎"?"#5b21b6":prevInfo.result==="不受胎"?"#991b1b":"#374151",fontWeight:600}}, "前年(" + prevInfo.season + ") " + prevInfo.result + (prevInfo.insDate ? " 種付" + prevInfo.insDate.slice(5).replace("-","/") : "") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : "") + (foalDue && !foalDate ? "　分娩予定 " + foalDue.slice(5).replace("-","/") : "")), stallion && /*#__PURE__*/React.createElement("span", {style:{fontSize:13,color:"#6b7280"}}, "♂ ", stallion), scheduledExam && /*#__PURE__*/React.createElement("span", {className:"badge badge-purple",style:{fontSize:12,padding:"6px 12px",fontWeight:600}}, "次回予定: ", scheduledExam), !scheduledExam && kase && /*#__PURE__*/React.createElement("span", {className:"badge badge-gray",style:{fontSize:12,padding:"6px 12px"}}, "次回予定: 未設定"), bStatus==="受胎" && insDate && /*#__PURE__*/React.createElement("span", {style:{fontSize:14,fontWeight:700,color:"#5b21b6",background:"#ede9fe",padding:"4px 12px",borderRadius:8,border:"1px solid #7c3aed"}}, "胎齢 ", fetalAge), (bStatus==="種付中" || bStatus==="不受胎") && insDate && daysFromIns >= 0 && /*#__PURE__*/React.createElement("span", {style:{fontSize:14,fontWeight:700,color:daysFromIns>=16?"#fff":"#92400e",background:daysFromIns>=16?"#dc2626":"#fef3c7",padding:"4px 12px",borderRadius:8,border:"1px solid "+(daysFromIns>=16?"#dc2626":"#f59e0b")}}, "種付"+daysFromIns+"日目" + (bStatus==="不受胎" ? "（不受胎）" : daysFromIns>=16 ? " 鑑定時期！" : " → 鑑定まで"+(16-daysFromIns)+"日"))), /*#__PURE__*/React.createElement("div", {style:{display:"grid",gridTemplateColumns: kase ? "1fr 1fr 1fr 1fr 1fr" : "2fr 1fr 1fr 1fr",gap:14,alignItems:"start"}}, kase ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "状態"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",flexWrap:"wrap",gap:3}}, ["継続中","種付中","受胎","不受胎"].map(s => { const sc = {"継続中":{bg:"#dbeafe",bc:"#2563eb",c:"#1e40af"},"種付中":{bg:"#fce7f3",bc:"#ec4899",c:"#9d174d"},"受胎":{bg:"#ede9fe",bc:"#7c3aed",c:"#5b21b6"},"不受胎":{bg:"#fee2e2",bc:"#ef4444",c:"#991b1b"}}; const active = bStatus===s; return /*#__PURE__*/React.createElement("button", {key:s,onClick:()=>setBStatus(s),style:{padding:"4px 8px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid",cursor:"pointer",borderColor:active?sc[s].bc:"#d1d5db",background:active?sc[s].bg:"#fff",color:active?sc[s].c:"#6b7280"}}, s); })) ) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "馬名（検索・新規登録可）"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:6}}, /*#__PURE__*/React.createElement(HorseSearchSelect, {horses:horses.filter(h=>!h.sex||h.sex==="牝"),farms:farms,cases:cases,value:selectedHorse,onChange:v=>{setSelectedHorse(v);if(v){const h=horses.find(x=>x.id===Number(v));if(h)setFilterFarm(String(h.farmId));}},onAddHorse:onAddHorse,onAddFarm:onAddFarm,defaultSex:"牝"})), horse && /*#__PURE__*/React.createElement("div", {style:{fontSize:12,color:"#2563eb",marginTop:4,fontWeight:600}}, horse?.name, " — ", farm?.name), !selectedHorse && /*#__PURE__*/React.createElement("div", {style:{fontSize:12,color:"#dc2626",marginTop:4,fontWeight:700}}, "⚠ 馬名を選ぶまでこのカルテは保存されません") ), kase && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "状況"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",flexWrap:"wrap",gap:3}}, ["子付き","空胎","上がり",""].map(s => { const siCol = {"子付き":{bg:"#fed7aa",bc:"#f97316",c:"#9a3412"},"空胎":{bg:"#dbeafe",bc:"#93c5fd",c:"#1e40af"},"上がり":{bg:"#d1fae5",bc:"#6ee7b7",c:"#065f46"},"":{bg:"#f3f4f6",bc:"#d1d5db",c:"#6b7280"}}; const active = bSituation===s; const label = s || "未設定"; const col = siCol[s] || siCol[""]; return /*#__PURE__*/React.createElement("button", {key:label,onClick:()=>setBSituation(s),style:{padding:"4px 8px",borderRadius:6,fontSize:10,fontWeight:600,border:"1px solid",cursor:"pointer",borderColor:active?col.bc:"#d1d5db",background:active?col.bg:"#fff",color:active?col.c:"#6b7280"}}, label); }) )), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "種付日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:insDate,onChange:e=>setInsDate(e.target.value)}), insDate && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,marginTop:2}}, /*#__PURE__*/React.createElement("span", {style:{color:"#7c3aed"}}, "胎齢: ", fetalAge), daysFromIns >= 0 && daysFromIns < 15 && /*#__PURE__*/React.createElement("span", {style:{color:"#f59e0b",marginLeft:6}}, "鑑定まで", 16-daysFromIns, "日"), daysFromIns >= 16 && /*#__PURE__*/React.createElement("span", {style:{color:"#dc2626",fontWeight:700,marginLeft:6}}, "鑑定時期！") )), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "出産日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:foalDate,onChange:e=>setFoalDate(e.target.value)}), foalDate && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,color:"#2563eb",marginTop:2}}, "経過: ", daysPost)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "鑑定日"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",type:"date",value:examDate,onChange:e=>setExamDate(e.target.value)}), scheduledExam && /*#__PURE__*/React.createElement("div", {style:{fontSize:10,color:"#f59e0b",marginTop:2}}, "予定: ", scheduledExam) )), /*#__PURE__*/React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:12}}, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "種牡馬名"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",value:stallion,onChange:e=>setStallion(e.target.value),placeholder:"種牡馬名"}) ), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {className:"lbl"}, "繁殖メモ"), /*#__PURE__*/React.createElement("input", {className:"inp-sm",value:note,onChange:e=>setNote(e.target.value),placeholder:"履歴等"}) ))), /*#__PURE__*/React.createElement("div", {className:"breed-two-col"}, /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 20
@@ -5665,7 +5740,11 @@ function BreedingInputPage({
       total += Number(f.vehicleKm||0) * 200 + Number(f.adjustFee||0);
       return total.toLocaleString();
     })(), "\u5186"))));
-  })), /*#__PURE__*/React.createElement(BreedingChartSummary, {findings: findings, insDate: insDate, foalDate: foalDate, bStatus: bStatus, stallion: stallion, horseName: horse?.name})),
+  })), /*#__PURE__*/React.createElement("div", null,
+    dupCase && /*#__PURE__*/React.createElement("div", {style:{background:"#fef2f2",border:"1px solid #fecaca",color:"#991b1b",borderRadius:8,padding:"8px 12px",fontSize:12,marginBottom:10,fontWeight:600}}, "⚠ " + (horse?.name || "") + " の " + thisSeason + " シーズンのカルテは既にあります（" + ((dupCase.findings||[]).length) + "回）。一覧からそのカルテを開いて追記してください。"),
+    /*#__PURE__*/React.createElement(BreedingChartSummary, {findings: findings, insDate: insDate, foalDate: foalDate, bStatus: bStatus, stallion: stallion, horseName: horse?.name}),
+    prevCase && /*#__PURE__*/React.createElement("div", {style:{marginTop:12,opacity:0.92}}, /*#__PURE__*/React.createElement(BreedingChartSummary, {findings: prevCase.findings || [], insDate: prevCase.inseminationDate || (prevInfo && prevInfo.insDate) || "", foalDate: prevCase.foalingDate || "", bStatus: prevCase.breedingStatus || "", stallion: prevCase.stallion || "", horseName: horse?.name, title: "📘 前年（" + breedingSeasonOf(prevCase) + "）の経過", compact: true}))
+  )),
   // ── 過去の繁殖記録 ──
   (() => {
     var horseId = kase ? kase.horseId : Number(selectedHorse);
@@ -5673,7 +5752,7 @@ function BreedingInputPage({
     var pastCases = cases.filter(function(c) {
       return c.type === "繁殖" && c.horseId === horseId && (!kase || c.id !== kase.id);
     }).sort(function(a,b) {
-      return (b.season || b.openDate || "").localeCompare(a.season || a.openDate || "");
+      return String(b.season || b.openDate || "").localeCompare(String(a.season || a.openDate || ""));
     });
     if (pastCases.length === 0) return null;
     return React.createElement("div", {className:"card",style:{padding:20,marginTop:16}},
@@ -8840,7 +8919,7 @@ function DashboardPage({
     const uniq = schedAll
       .filter(x => x.date)
       .filter(x => !bsFilter || x.status === bsFilter)
-      .filter(x => bsShowAll || x.diff <= 14)
+      .filter(x => bsShowAll || x.diff <= (x.type === "分娩予定" ? 21 : 14))
       .sort((a,b) => bsSort === "farm" ? (a.farm.localeCompare(b.farm,"ja") || a.date.localeCompare(b.date))
                    : bsSort === "horse" ? a.horse.localeCompare(b.horse,"ja")
                    : (a.date.localeCompare(b.date) || a.farm.localeCompare(b.farm,"ja")));
@@ -8878,7 +8957,7 @@ function DashboardPage({
             const isPast = s.date < todayS;
             return /*#__PURE__*/React.createElement("div", {key:i, style:{padding:"6px 12px",borderBottom:"1px solid #f9fafb",display:"flex",alignItems:"center",gap:8,cursor:"pointer",background:isToday?"#fffbeb":isPast?"#fef2f2":"#fff"}, onClick:()=>onOpenCase(s.c)},
               /*#__PURE__*/React.createElement("span", {style:{fontSize:12,fontWeight:700,color:isToday?"#d97706":isPast?"#dc2626":"#374151",minWidth:65}}, mm+"/"+dd+"("+wd+")"),
-              /*#__PURE__*/React.createElement("span", {style:{fontSize:11,padding:"2px 8px",borderRadius:6,background:s.type==="妊鑑"?"#fee2e2":s.type==="次発情"?"#ffedd5":s.type==="再鑑定"?"#ede9fe":s.type==="次回"?"#dbeafe":"#f3f4f6",color:s.type==="妊鑑"?"#991b1b":s.type==="次発情"?"#9a3412":s.type==="再鑑定"?"#5b21b6":s.type==="次回"?"#1e40af":"#374151",fontWeight:600}}, s.type),
+              /*#__PURE__*/React.createElement("span", {style:{fontSize:11,padding:"2px 8px",borderRadius:6,background:s.type==="妊鑑"?"#fee2e2":s.type==="次発情"?"#ffedd5":s.type==="再鑑定"?"#ede9fe":s.type==="次回"?"#dbeafe":s.type==="分娩予定"?"#fef3c7":s.type==="産後"?"#d1fae5":"#f3f4f6",color:s.type==="妊鑑"?"#991b1b":s.type==="次発情"?"#9a3412":s.type==="再鑑定"?"#5b21b6":s.type==="次回"?"#1e40af":s.type==="分娩予定"?"#92400e":s.type==="産後"?"#065f46":"#374151",fontWeight:600}}, s.type),
               /*#__PURE__*/React.createElement("div", {style:{flex:1}},
                 /*#__PURE__*/React.createElement("span", {style:{fontSize:13,fontWeight:600}}, s.horse),
                 /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#6b7280",marginLeft:6}}, s.farm)
@@ -10490,8 +10569,9 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
 }
 
 // ═══════════════ 繁殖カルテ: 経過記録（カルテ風テキスト表示） ═══════════════
-function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, horseName }) {
+function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, horseName, title, compact }) {
   const E = React.createElement;
+  const [showAll, setShowAll] = useState(false);
   const bm = typeof INIT_BREEDING_TREATMENTS !== "undefined" ? INIT_BREEDING_TREATMENTS : [];
   const procName = pid => { const m = bm.find(x => x.id === pid); return m ? m.name : String(pid); };
   // 日付昇順（古い→新しい）に並べ替え。元の配列の index は日数計算（PG日目）に使う
@@ -10531,18 +10611,18 @@ function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, 
     E("span", { style: { color: "#9ca3af", flexShrink: 0, width: 28 } }, label), E("span", { style: { color: color || "#111827", whiteSpace: "pre-wrap" } }, text));
   return E("div", { className: "card breed-chart", style: { padding: 16 } },
     E("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 } },
-      E("h3", { style: { fontSize: 14, fontWeight: 700 } }, "📋 経過記録"),
-      E("span", { style: { fontSize: 11, color: "#6b7280" } }, rows.length + "回")),
+      E("h3", { style: { fontSize: 14, fontWeight: 700 } }, title || "📋 経過記録"),
+      E("span", { style: { fontSize: 11, color: "#6b7280" } }, rows.length + "回" + (compact && !showAll && rows.length > 6 ? "（直近6回）" : ""))),
     (insDate || foalDate || stallion) && E("div", { style: { fontSize: 11, color: "#374151", background: "#f9fafb", borderRadius: 6, padding: "6px 10px", marginBottom: 10, lineHeight: 1.6 } },
       foalDate && E("div", null, "出産 " + fmtDate(foalDate)),
       insDate && E("div", null, "種付 " + fmtDate(insDate) + (stallion ? "　♂ " + stallion : "")),
       bStatus && E("div", null, "状態 " + bStatus)),
     rows.length === 0 ? E("div", { style: { fontSize: 12, color: "#9ca3af" } }, "記録はまだありません") :
-    rows.map(({ f, i }, k) => {
+    (compact && !showAll && rows.length > 6 ? [E("button", { key: "more", className: "btn btn-sm btn-secondary", style: { fontSize: 11, marginBottom: 8 }, onClick: () => setShowAll(true) }, "▸ 前の " + (rows.length - 6) + " 回も表示")] : []).concat((compact && !showAll ? rows.slice(-6) : rows).map(({ f, i }, k, arr) => {
       const tags = context(f, i);
       const procs = (f.procedures || []).map(procName).filter(Boolean);
       const ov = ovary(f), ut = uterus(f);
-      const isLatest = k === rows.length - 1;
+      const isLatest = k === arr.length - 1 && !compact;
       return E("div", { key: i, style: { borderLeft: "3px solid " + (f.insem ? "#ec4899" : f.concep ? "#7c3aed" : f.notConcep ? "#ef4444" : isLatest ? "#22c55e" : "#e5e7eb"), padding: "6px 0 6px 10px", marginBottom: 8, background: isLatest ? "#f0fdf4" : "transparent", borderRadius: "0 6px 6px 0" } },
         E("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 2 } },
           E("span", { style: { fontSize: 13, fontWeight: 700, color: "#111827", fontVariantNumeric: "tabular-nums" } }, fmtDate(f.date)),
@@ -10552,7 +10632,7 @@ function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, 
         ut && line("子宮", ut, "#1d4ed8"),
         f.memo && line("備考", f.memo, "#4b5563"),
         f.schedule && line("予定", f.schedule, "#7c3aed"));
-    }));
+    })));
 }
 
 // ═══════════════ データ整合性（馬が見つからないカルテ・重複馬） ═══════════════
@@ -10750,8 +10830,9 @@ function App() {
   const FARM_MASTER_VERSION = "2026-04-08";
   const [farms, setFarms] = useState(() => {
     const savedVer = localStorage.getItem("hokuyo_farm_version");
-    if (savedVer === FARM_MASTER_VERSION && effectiveData?.farms) {
-      return effectiveData.farms;
+    if (effectiveData?.farms && effectiveData.farms.length > 0) {
+      if (savedVer !== FARM_MASTER_VERSION) localStorage.setItem("hokuyo_farm_version", FARM_MASTER_VERSION);
+      return effectiveData.farms;   // 保存データがあれば常に優先（INIT_FARMSは空）
     }
     // 新バージョン検知 → INIT_FARMSで上書き
     localStorage.setItem("hokuyo_farm_version", FARM_MASTER_VERSION);
@@ -10768,8 +10849,9 @@ function App() {
   const PAYMENTS_VERSION = "2026-04-08b";
   const [payments, setPayments] = useState(() => {
     const savedVer = localStorage.getItem("hokuyo_payments_version");
-    if (savedVer === PAYMENTS_VERSION && effectiveData?.payments) {
-      return effectiveData.payments;
+    if (effectiveData?.payments && effectiveData.payments.length > 0) {
+      if (savedVer !== PAYMENTS_VERSION) localStorage.setItem("hokuyo_payments_version", PAYMENTS_VERSION);
+      return effectiveData.payments;  // 保存データがあれば常に優先（INIT_PAYMENTSは空）
     }
     localStorage.setItem("hokuyo_payments_version", PAYMENTS_VERSION);
     return INIT_PAYMENTS;
@@ -10990,37 +11072,46 @@ function App() {
   };
 
   // ── 年度繰越 ──
-  const yearCarryover = (statusesToCarry, nextYear) => {
-    const breedingCases = cases.filter(c => c.type === "繁殖" && !c.archived);
-    const toCarry = breedingCases.filter(c => statusesToCarry.includes(c.breedingStatus || ""));
+  // 年度繰越: 選んだカルテ（馬）を翌シーズンのカルテとして作る
+  //   前年受胎 → 状況「子付き」（分娩予定＝種付+340日をダッシュボードに表示）／ それ以外 → 「空胎」
+  //   前年の結果・種付日・種牡馬は prevSeason に保存し、一覧の「前年」列とカルテ上部に出す。所見は引き継がない（前年カルテに残る）
+  const yearCarryover = (caseIds, nextYear) => {
+    const toCarry = cases.filter(c => c.type === "繁殖" && !c.archived && caseIds.includes(c.id));
     if (toCarry.length === 0) { alert("繰越対象の馬がありません"); return; }
-    // 繰越: 既存カルテに season タグを付与し、新しいカルテを作成
-    const maxId = Math.max(...cases.map(c => c.id), 0);
-    const newCases = toCarry.map((c, idx) => ({
-      id: maxId + idx + 1,
-      type: "繁殖",
-      horseId: c.horseId,
-      breedingStatus: c.breedingStatus === "受胎" || c.breedingStatus === "妊娠中" ? "妊娠中" : "継続中",
-      breedingSituation: c.breedingStatus === "受胎" || c.breedingStatus === "妊娠中" ? "子付き" : c.breedingSituation || "",
-      inseminationDate: (c.breedingStatus === "受胎" || c.breedingStatus === "妊娠中") ? c.inseminationDate : "",
-      foalingDate: c.foalingDate || "",
-      stallion: c.stallion || "",
-      findings: [],
-      openDate: nextYear + "-01-01",
-      vet: c.vet || "佐藤",
-      season: nextYear,
-      carryoverFrom: c.id
-    }));
-    // 旧カルテにシーズンタグ付与
-    const currentYear = new Date().getFullYear();
-    const updatedOld = cases.map(c => {
-      if (toCarry.find(tc => tc.id === c.id)) {
-        return {...c, season: currentYear, breedingStatus: c.breedingStatus === "継続中" ? "診療終了" : c.breedingStatus};
-      }
-      return c;
+    const already = new Set(cases.filter(c => c.type === "繁殖" && !c.archived && breedingSeasonOf(c) === nextYear).map(c => Number(c.horseId)));
+    const maxId = Math.max(...cases.map(c => Number(c.id) || 0), Date.now());
+    let idx = 0; let skipped = 0;
+    const newCases = [];
+    toCarry.forEach(c => {
+      if (already.has(Number(c.horseId))) { skipped++; return; }
+      const e = breedingEffective(c);
+      const result = e.status === "受胎" ? "受胎" : e.status === "不受胎" ? "不受胎" : (e.insDate ? "未判定" : "未種付");
+      const h = horses.find(x => x.id === c.horseId);
+      newCases.push({
+        id: maxId + (++idx),
+        type: "繁殖",
+        horseId: c.horseId,
+        farmId: c.farmId || (h ? h.farmId : null),
+        diagnosis: "",
+        caseStatus: "継続中",
+        breedingStatus: "継続中",
+        breedingSituation: result === "受胎" ? "子付き" : "空胎",
+        inseminationDate: "", foalingDate: "", examDate: "", scheduledExam: "",
+        stallion: "",
+        breedingNote: "",
+        findings: [],
+        openDate: nextYear + "-01-01",
+        vet: c.vet || "佐藤",
+        season: nextYear,
+        carryoverFrom: c.id,
+        prevSeason: { season: breedingSeasonOf(c), result: result, insDate: e.insDate || "", stallion: c.stallion || "", judgeDate: e.judgeDate || "", caseId: c.id, foalingDate: c.foalingDate || "" }
+      });
     });
+    // 旧カルテにシーズンを明示（未設定のもののみ）
+    const updatedOld = cases.map(c => (toCarry.find(tc => tc.id === c.id) && !c.season) ? {...c, season: breedingSeasonOf(c)} : c);
     setCases([...updatedOld, ...newCases]);
-    alert(toCarry.length + "頭を" + nextYear + "年シーズンへ繰り越しました。\n妊娠中の馬は妊娠情報を引き継いでいます。");
+    showToast(newCases.length + "頭を " + nextYear + " シーズンへ繰り越しました" + (skipped ? "（既にカルテがある " + skipped + " 頭はスキップ）" : ""));
+    alert(newCases.length + "頭を" + nextYear + "年シーズンへ繰り越しました。\n前年受胎の馬は「子付き」、それ以外は「空胎」として登録しました。\n前年の種付日・結果はカルテ上部と一覧の「前年」列に表示されます。" + (skipped ? "\n（既に" + nextYear + "年のカルテがある" + skipped + "頭はスキップしました）" : ""));
   };
 
   // Export data as JSON file
