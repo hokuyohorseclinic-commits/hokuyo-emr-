@@ -373,7 +373,7 @@ var SYNC_COLLECTION = "clinicData";
 var SYNC_FIELDS = [
   "farms", "horses", "drugsMaster", "treatmentsMaster",
   "breedingTreatments", "cases", "payments", "billingActual",
-  "purchaseHistory", "closedMonths", "insuranceList", "vets", "currentVet"
+  "purchaseHistory", "closedMonths", "insuranceList", "vets", "currentVet", "memos"
 ];
 
 // ─── Firestore 書き込み（デバウンス付き） ───
@@ -1850,6 +1850,64 @@ function DrugModal({ drug, onSave, onClose }) {
         }}, drug ? "更新" : "登録"))
     )
   );
+}
+
+// ═══════════════ 診療メモ受信箱（携帯で話して保存 → Claude がカルテにする）═══════════════
+function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone }) {
+  const E = React.createElement;
+  const [text, setText] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [replyFor, setReplyFor] = useState(null);
+  const [replyText, setReplyText] = useState("");
+  const list = (memos || []).slice().sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  const pending = list.filter(m => m.status !== "処理済" && m.status !== "削除");
+  const shown = showAll ? list.filter(m => m.status !== "削除").slice(0, 50) : pending;
+  const save = () => {
+    const t = text.trim(); if (!t) return;
+    const now = new Date();
+    const m = { id: "memo_" + now.getTime(), text: t, createdAt: now.toISOString(), date: todayJST(), status: "未処理", reply: "", caseIds: [], device: phone ? "phone" : "pc" };
+    onUpdate([m].concat(memos || []));
+    setText("");
+    showToast("メモを保存しました（" + (pending.length + 1) + "件が未処理）");
+  };
+  const setStatus = (id, st) => onUpdate((memos || []).map(m => m.id === id ? Object.assign({}, m, {status: st, processedAt: st === "処理済" ? new Date().toISOString() : m.processedAt}) : m));
+  const answer = (id) => {
+    const t = replyText.trim(); if (!t) return;
+    onUpdate((memos || []).map(m => m.id === id ? Object.assign({}, m, {text: m.text + "\n→ 回答: " + t, status: "未処理"}) : m));
+    setReplyFor(null); setReplyText("");
+  };
+  const fmt = iso => { if (!iso) return ""; const d = new Date(iso); return (d.getMonth()+1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0"); };
+  const stCol = { "未処理": "badge-orange", "要確認": "badge-red", "処理済": "badge-green" };
+  const big = phone;
+  return E("div", {className: "card", style: {overflow: "hidden", marginBottom: compact ? 0 : 16}},
+    E("div", {style: {padding: big ? "12px 14px" : "10px 14px", borderBottom: "1px solid #f3f4f6", background: "#f0fdf4", color: "#166534", fontWeight: 700, fontSize: big ? 16 : 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap"}},
+      E("span", null, "📝 診療メモ"),
+      E("span", {className: "badge badge-orange"}, "未処理 " + pending.filter(m => m.status === "未処理").length),
+      pending.some(m => m.status === "要確認") && E("span", {className: "badge badge-red"}, "要確認 " + pending.filter(m => m.status === "要確認").length),
+      E("span", {style: {flex: 1}}),
+      E("button", {className: "btn btn-sm btn-secondary", style: {fontSize: 11}, onClick: () => setShowAll(!showAll)}, showAll ? "未処理だけ" : "処理済も表示")),
+    E("div", {style: {padding: big ? 14 : 10, background: "#fff"}},
+      E("textarea", {value: text, onChange: e => setText(e.target.value), rows: big ? 4 : 2, placeholder: "例: 10/27 北洋牧場 アリシアン 疝痛 再診 筋注 バナミン10ml 車20km\n（iPhoneはキーボードのマイクで話せます。1頭1行）", style: {width: "100%", fontSize: big ? 17 : 13, padding: 10, border: "1px solid #d1d5db", borderRadius: 8, boxSizing: "border-box", resize: "vertical", lineHeight: 1.5}}),
+      E("div", {style: {display: "flex", gap: 8, marginTop: 6, alignItems: "center"}},
+        E("span", {style: {fontSize: 11, color: "#6b7280", flex: 1}}, "保存したメモは Claude がカルテにします。確定前のカルテは「確認が必要なカルテ」に出ます。"),
+        E("button", {className: "btn btn-primary", onClick: save, disabled: !text.trim(), style: big ? {padding: "10px 24px", fontSize: 16} : {}}, "保存"))),
+    shown.length > 0 && E("div", {style: {maxHeight: phone ? "none" : 300, overflowY: "auto", borderTop: "1px solid #f3f4f6"}},
+      shown.map(m => E("div", {key: m.id, style: {padding: "8px 12px", borderBottom: "1px solid #f9fafb", fontSize: big ? 15 : 12, background: m.status === "要確認" ? "#fef2f2" : m.status === "処理済" ? "#f9fafb" : "#fff"}},
+        E("div", {style: {display: "flex", alignItems: "center", gap: 8, marginBottom: 2}},
+          E("span", {style: {color: "#6b7280", fontSize: 11}}, fmt(m.createdAt)),
+          E("span", {className: "badge " + (stCol[m.status] || "badge-gray"), style: {fontSize: 10}}, m.status || "未処理"),
+          E("span", {style: {flex: 1}}),
+          m.status !== "処理済" ? E("button", {className: "btn btn-sm btn-secondary", style: {fontSize: 10}, onClick: () => setStatus(m.id, "処理済")}, "✓ 処理済") : E("button", {className: "btn btn-sm btn-secondary", style: {fontSize: 10}, onClick: () => setStatus(m.id, "未処理")}, "戻す"),
+          E("button", {className: "btn btn-sm", style: {fontSize: 10, color: "#dc2626", background: "none", border: "none"}, onClick: () => { if (confirm("このメモを削除しますか？")) setStatus(m.id, "削除"); }}, "削除")),
+        E("div", {style: {whiteSpace: "pre-wrap", lineHeight: 1.5}}, m.text),
+        m.reply && E("div", {style: {marginTop: 4, padding: "6px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, color: "#1e40af", whiteSpace: "pre-wrap"}}, "🤖 " + m.reply),
+        (m.caseIds || []).length > 0 && onOpenCase && E("div", {style: {marginTop: 4, display: "flex", gap: 4, flexWrap: "wrap"}},
+          m.caseIds.map(cid => { const c = (cases || []).find(x => x.id === cid); const h = c && (horses || []).find(x => x.id === c.horseId); return c ? E("button", {key: cid, className: "btn btn-sm btn-secondary", style: {fontSize: 10}, onClick: () => onOpenCase(c)}, "📋 " + (h ? h.name : "") + " " + (c.diagnosis || c.type)) : null; })),
+        m.status === "要確認" && E("div", {style: {marginTop: 6}},
+          replyFor === m.id
+            ? E("div", {style: {display: "flex", gap: 6}}, E("input", {className: "inp-sm", value: replyText, onChange: e => setReplyText(e.target.value), placeholder: "回答を入力", style: {flex: 1}}), E("button", {className: "btn btn-sm btn-primary", onClick: () => answer(m.id)}, "送る"))
+            : E("button", {className: "btn btn-sm btn-primary", style: {fontSize: 11}, onClick: () => { setReplyFor(m.id); setReplyText(""); }}, "回答する"))))),
+    shown.length === 0 && E("div", {style: {padding: "12px 16px", color: "#9ca3af", fontSize: 12, textAlign: "center"}}, showAll ? "メモはありません" : "未処理のメモはありません"));
 }
 
 // ═══════════════ 一般カルテ 一括作成（予防接種・駆虫など同内容を複数頭に）═══════════════
@@ -9095,7 +9153,9 @@ function DashboardPage({
   farms,
   drugsMaster,
   onOpenCase,
-  onCloseCase
+  onCloseCase,
+  memos,
+  onUpdateMemos
 }) {
   const contCasesAll = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D" && !c.archived);
   const todayStr = todayJST();
@@ -9256,7 +9316,7 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
+  }, s.sub)))))), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
     /*#__PURE__*/React.createElement("div", {style: {padding: "10px 14px", background: "#fffbeb", color: "#92400e", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer"}, onClick: () => setShowCheck(!showCheck)},
       /*#__PURE__*/React.createElement("span", null, (showCheck ? "▾" : "▸") + " ⚠ 確認が必要なカルテ"),
       /*#__PURE__*/React.createElement("span", {className: "badge badge-orange"}, checkItems.length + "件"),
@@ -11300,6 +11360,9 @@ function App() {
     return INIT_PURCHASE_HISTORY;
   });
   const [insuranceList, setInsuranceList] = useState(() => effectiveData?.insuranceList || []);
+  const [memos, setMemos] = useState(() => effectiveData?.memos || []);   // 診療メモ受信箱（携帯から話して保存 → Claudeがカルテ化）
+  const [memoMode, setMemoMode] = useState(() => (location.hash || "").indexOf("memo") >= 0);
+  React.useEffect(() => { const h = () => setMemoMode((location.hash || "").indexOf("memo") >= 0); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
   const [editingCase, setEditingCase] = useState(null);
   const [showNewHorse, setShowNewHorse] = useState(false);
   const [showNewFarm, setShowNewFarm] = useState(false);
@@ -11370,6 +11433,7 @@ function App() {
     registerRemoteUpdateCallback("purchaseHistory", function(d) { setPurchaseHistory(d); });
     registerRemoteUpdateCallback("closedMonths", function(d) { setClosedMonths(d); });
     registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
+    registerRemoteUpdateCallback("memos", function(d) { setMemos(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
     registerRemoteUpdateCallback("currentVet", function(d) { setCurrentVet(d); });
     // 同期ステータスリスナー
@@ -11384,7 +11448,7 @@ function App() {
     const dataToStore = {
       farms, horses, drugsMaster, treatmentsMaster, cases, payments,
       currentVet, vets, closedMonths, billingActual, breedingTreatments,
-      purchaseHistory, insuranceList
+      purchaseHistory, insuranceList, memos
     };
     try {
       lsSetData(JSON.stringify(dataToStore));
@@ -11392,7 +11456,7 @@ function App() {
     } catch (e) {
       console.error("Failed to persist data:", e);
     }
-  }, [farms, horses, drugsMaster, treatmentsMaster, cases, payments, currentVet, vets, closedMonths, billingActual, breedingTreatments, purchaseHistory, insuranceList]);
+  }, [farms, horses, drugsMaster, treatmentsMaster, cases, payments, currentVet, vets, closedMonths, billingActual, breedingTreatments, purchaseHistory, insuranceList, memos]);
 
   // Firebase同期: 各データ項目を個別に監視・書き込み（他の項目を巻き込まない）
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("farms", farms); }, [farms]);
@@ -11406,6 +11470,9 @@ function App() {
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("purchaseHistory", purchaseHistory); }, [purchaseHistory]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("closedMonths", closedMonths); }, [closedMonths]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("memos", memos); }, [memos]);
+  // Claude（Cowork）がメモをカルテ化するための入口（ログイン済みの本番画面でのみ使う）
+  React.useEffect(() => { window.__emr = { saveCase, setCases, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos}) }; });
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("currentVet", currentVet); }, [currentVet]);
 
@@ -11549,9 +11616,9 @@ function App() {
   const exportData = () => {
     const dataToStore = {
       farms, horses, drugsMaster, treatmentsMaster, cases, payments, currentVet, vets,
-      billingActual,
+      billingActual, closedMonths, breedingTreatments, purchaseHistory, insuranceList, memos,
       exportDate: new Date().toISOString(),
-      version: "1.0"
+      version: "1.1"
     };
     const blob = new Blob([JSON.stringify(dataToStore, null, 2)], {type: "application/json"});
     const url = URL.createObjectURL(blob);
@@ -11885,7 +11952,9 @@ function App() {
           farms: farms,
           drugsMaster: drugsMaster,
           onOpenCase: openCase,
-          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x))
+          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
+          memos: memos,
+          onUpdateMemos: setMemos
         });
       case "general_batch":
         return /*#__PURE__*/React.createElement(BatchKartePage, {
@@ -12228,7 +12297,9 @@ function App() {
           farms: farms,
           drugsMaster: drugsMaster,
           onOpenCase: openCase,
-          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x))
+          onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
+          memos: memos,
+          onUpdateMemos: setMemos
         });
     }
   };
@@ -13163,6 +13234,17 @@ function App() {
             E("div", {style:{width:40,fontSize:10,color:"#6b7280",textAlign:"right"}}, v.trips+"回"))))))
     );
   }
+  if (memoMode) {
+    // ── 携帯用メモ画面（URL末尾 #memo）──
+    const pendingMemos = memos.filter(m => m.status !== "処理済" && m.status !== "削除").length;
+    return /*#__PURE__*/React.createElement("div", {style: {minHeight: "100vh", background: "#f3f4f6", padding: 12, maxWidth: 640, margin: "0 auto"}},
+      /*#__PURE__*/React.createElement("div", {style: {display: "flex", alignItems: "center", gap: 10, marginBottom: 12}},
+        /*#__PURE__*/React.createElement("div", {style: {width: 36, height: 36, borderRadius: 10, background: "#10b981", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13}}, "北洋"),
+        /*#__PURE__*/React.createElement("div", {style: {flex: 1}}, /*#__PURE__*/React.createElement("div", {style: {fontWeight: 700, fontSize: 16}}, "診療メモ"), /*#__PURE__*/React.createElement("div", {style: {fontSize: 11, color: "#6b7280"}}, todayJST() + "　" + (syncStatus === "synced" ? "☁ 同期済" : syncStatus === "syncing" ? "☁ 同期中" : syncStatus === "local" ? "ローカル" : "⚠ " + syncStatus))),
+        /*#__PURE__*/React.createElement("button", {className: "btn btn-sm btn-secondary", onClick: () => { location.hash = ""; setMemoMode(false); }}, "通常画面")),
+      /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: setMemos, cases: cases, horses: horses, phone: true}),
+      /*#__PURE__*/React.createElement("div", {style: {fontSize: 11, color: "#6b7280", marginTop: 10, lineHeight: 1.6}}, "この画面をホーム画面に追加しておくと、牧場でそのまま開けます（Safariの共有 → ホーム画面に追加）。メモは事務所のパソコン・iPadにも同期されます。"));
+  }
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -13251,6 +13333,7 @@ function App() {
   }));
 }
 ReactDOM.render(/*#__PURE__*/React.createElement(App, null), document.getElementById("root"));
+// 携帯から #memo で開くと、メモ専用の簡易画面になる（App の中で判定）
 
 </script>
 <script>
