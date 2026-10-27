@@ -1262,12 +1262,14 @@ var INIT_PURCHASE_HISTORY=[];
 var INIT_CASES=[];
 
 // ═══════════════ UTILS (plain JS) ═══════════════
-function calcDrugLine(drug,dose){return drug?Math.round(drug.pricePerUnit*dose):0;}
+// 薬品の請求額: 治療使用＝pricePerUnit(円/unit)×数量、単品販売(useRx)＝packPrice(円/packUnit)×数量
+function drugUnitPrice(drug,useRx){ if(!drug) return 0; if(useRx && drug.packPrice) return Number(drug.packPrice)||0; return Number(drug.pricePerUnit)||0; }
+function calcDrugLine(drug,dose,useRx){return drug?Math.round(drugUnitPrice(drug,useRx)*(Number(dose)||0)):0;}
 function calcVisitTotal(v,dm){
 if(v.totalFee)return Number(v.totalFee);
 var viFee=Number(v.visitFee||0);
 var t=(v.treatments||[]).reduce(function(s,x){return s+(x.fee||x.amount||0);},0);
-var d=(v.drugs||[]).reduce(function(s,r){if(r.fee)return s+r.fee;var dr=dm.find(function(x){return x.id===r.drugId;});return s+(dr?calcDrugLine(dr,r.dose):0);},0);
+var d=(v.drugs||[]).reduce(function(s,r){if(r.fee)return s+r.fee;var dr=dm.find(function(x){return x.id===r.drugId;});return s+(dr?calcDrugLine(dr,r.dose,r.useRx):0);},0);
 var vf=v.vehicleKm?Math.round(Number(v.vehicleKm)*120):0;
 return viFee+t+d+vf+Number(v.adjustFee||0);
 }
@@ -1735,6 +1737,13 @@ function normalizeDrug(d){
   if (e.active == null) e.active = false;
   if (!e.defaultDose) e.defaultDose = 1;
   if (e.cost == null) e.cost = 0;
+  // 単品販売（本・箱単位で渡すときの売値）: 旧「処方単価(rxPrice)」を引き継ぐ
+  if (!e.packUnit) e.packUnit = e.unit;
+  if (!e.packSize || Number(e.packSize) <= 0) e.packSize = 1;          // 1 packUnit ＝ packSize unit
+  if (e.packPrice == null) e.packPrice = Number(e.rxPrice) || 0;        // 円 / packUnit（0＝単品価格なし）
+  if (e.baseCost == null) e.baseCost = 0;                               // 基準原価 円 / packUnit（運賃・税込み、輸入は基準レートで換算）
+  if (e.markup == null) e.markup = 0;                                   // 掛率（0＝未設定。国内1.3／指示薬1.5／注射薬1.6）
+  delete e.rxPrice;
   delete e.drugType; delete e.spec; delete e.salesPrice; delete e.drugCategory; delete e.sellUnit; delete e.totalQty; delete e.packCost;
   return e;
 }
@@ -1742,7 +1751,7 @@ function normalizeDrug(d){
 function migrateDrugsMaster(list, cases){
   if (!Array.isArray(list)) return INIT_DRUGS.slice();
   var isNew = list.length > 0 && list.every(function(d){ return d && d.category != null && d.active != null; });
-  if (isNew) return list.map(function(d){ return DRUG_CATEGORY_ALIAS[d.category] ? Object.assign({}, d, {category: DRUG_CATEGORY_ALIAS[d.category]}) : d; });
+  if (isNew) return list.map(function(d){ return normalizeDrug(d); });
   var used = new Set();
   (cases || []).forEach(function(c){
     (c.visits || []).forEach(function(v){ (v.drugs || []).forEach(function(r){ used.add(Number(r.drugId)); }); });
@@ -1754,7 +1763,7 @@ function migrateDrugsMaster(list, cases){
   list.forEach(function(d){
     if (!d || seen.has(d.id)) {
       // 既存: ユーザーが変更した処方単価・アーカイブは引き継ぐ
-      var t = d && byId[d.id]; if (t && d.rxPrice) { out.find(function(x){return x.id===d.id;}).rxPrice = d.rxPrice; }
+      var t = d && byId[d.id]; if (t && (d.rxPrice || d.packPrice)) { out.find(function(x){return x.id===d.id;}).packPrice = d.packPrice || d.rxPrice; }
       return;
     }
     if (used.has(Number(d.id)) || (d.id > 1000000000)) { // カルテ使用中 or アプリで新規登録したもの(Date.now id)
@@ -1773,9 +1782,13 @@ function DrugModal({ drug, onSave, onClose }) {
   var _cost = useState(d0?.cost || ""); var cost = _cost[0]; var setCost = _cost[1];
   var _a = useState(d0 ? !!d0.active : true); var active = _a[0]; var setActive = _a[1];
   var _dd = useState(d0?.defaultDose || 1); var defDose = _dd[0]; var setDefDose = _dd[1];
-  var _rx = useState(d0?.rxPrice || ""); var rxPrice = _rx[0]; var setRxPrice = _rx[1];
+  var _pp = useState(d0?.packPrice || ""); var packPrice = _pp[0]; var setPackPrice = _pp[1];
+  var _pu = useState(d0?.packUnit || d0?.unit || "本"); var packUnit = _pu[0]; var setPackUnit = _pu[1];
+  var _ps = useState(d0?.packSize || 1); var packSize = _ps[0]; var setPackSize = _ps[1];
+  var _bc = useState(d0?.baseCost || ""); var baseCost = _bc[0]; var setBaseCost = _bc[1];
+  var _mk = useState(d0?.markup || ""); var markup = _mk[0]; var setMarkup = _mk[1];
   var _im = useState(d0?.isImport || false); var isImport = _im[0]; var setIsImport = _im[1];
-  var _more = useState(!!(d0 && (d0.cost || d0.rxPrice))); var more = _more[0]; var setMore = _more[1];
+  var _more = useState(!!(d0 && (d0.cost || d0.packPrice || d0.baseCost))); var more = _more[0]; var setMore = _more[1];
   var inpS = {background:"#fff",color:"#1a1a1a"};
   var chipS = function(on){return {padding:"5px 12px",fontSize:13,borderRadius:8,border:on?"2px solid #2563eb":"1px solid #d1d5db",background:on?"#2563eb":"#fff",color:on?"#fff":"#374151",cursor:"pointer",fontWeight:600}};
   var row = function(label, body){ return E("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:12}}, E("span",{style:{fontSize:13,color:"#374151",minWidth:84,fontWeight:600}},label), body); };
@@ -1802,15 +1815,26 @@ function DrugModal({ drug, onSave, onClose }) {
           E("label",{style:{display:"flex",alignItems:"center",gap:6,fontSize:13}}, E("input",{type:"checkbox",checked:active,onChange:function(e){setActive(e.target.checked)},style:{width:16,height:16}}),"よく使う（カルテの一覧に出す）"),
           E("label",{style:{display:"flex",alignItems:"center",gap:6,fontSize:13}}, E("input",{type:"checkbox",checked:isImport,onChange:function(e){setIsImport(e.target.checked)},style:{width:16,height:16}}),"輸入薬"))),
       E("div",{style:{borderTop:"1px dashed #e5e7eb",paddingTop:8,marginBottom:10}},
-        E("button",{type:"button",onClick:function(){setMore(!more)},style:{background:"none",border:"none",color:"#2563eb",fontSize:12,cursor:"pointer",padding:0}}, (more?"▼":"▶")+" 仕入れ情報・処方単価（任意）"),
+        E("button",{type:"button",onClick:function(){setMore(!more)},style:{background:"none",border:"none",color:"#2563eb",fontSize:12,cursor:"pointer",padding:0}}, (more?"▼":"▶")+" 単品販売・仕入れ情報（任意）"),
         more ? E("div",{style:{marginTop:8,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 12px"}},
           row("仕入単価", E("div",{style:{display:"flex",alignItems:"center",gap:8}},
             E("input",{className:"inp",type:"number",value:cost,onChange:function(e){setCost(e.target.value)},style:Object.assign({},inpS,{width:110,textAlign:"right"})}),
             E("span",{style:{fontSize:12,color:"#6b7280"}},"円 / "+unit),
             c>0 ? E("button",{type:"button",onClick:function(){setPrice(Math.round(c*1.3))},style:{padding:"3px 8px",fontSize:11,borderRadius:4,border:"1px solid #bfdbfe",background:"#fff",color:"#1e40af",cursor:"pointer",fontWeight:600}},"×1.3 → 単価 ¥"+Math.round(c*1.3).toLocaleString()) : null)),
-          row("処方単価", E("div",{style:{display:"flex",alignItems:"center",gap:8}},
-            E("input",{className:"inp",type:"number",value:rxPrice,onChange:function(e){setRxPrice(e.target.value)},placeholder:"未設定=単価と同じ",style:Object.assign({},inpS,{width:110,textAlign:"right"})}),
-            E("span",{style:{fontSize:12,color:"#6b7280"}},"円 / "+unit)))
+          row("単品販売", E("div",{style:{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}},
+            E("span",{style:{fontSize:12,color:"#6b7280"}},"1"),
+            E("input",{className:"inp",value:packUnit,onChange:function(e){setPackUnit(e.target.value)},style:Object.assign({},inpS,{width:54,fontSize:12,textAlign:"center"}),placeholder:"本"}),
+            E("span",{style:{fontSize:12,color:"#6b7280"}},"＝"),
+            E("input",{className:"inp",type:"number",value:packSize,onChange:function(e){setPackSize(e.target.value)},style:Object.assign({},inpS,{width:64,textAlign:"right"})}),
+            E("span",{style:{fontSize:12,color:"#6b7280"}},unit+"　売値"),
+            E("input",{className:"inp",type:"number",value:packPrice,onChange:function(e){setPackPrice(e.target.value)},placeholder:"未設定",style:Object.assign({},inpS,{width:100,textAlign:"right",fontWeight:700})}),
+            E("span",{style:{fontSize:12,color:"#6b7280"}},"円 / "+(packUnit||"本")))),
+          row("基準原価", E("div",{style:{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}},
+            E("input",{className:"inp",type:"number",value:baseCost,onChange:function(e){setBaseCost(e.target.value)},style:Object.assign({},inpS,{width:100,textAlign:"right"})}),
+            E("span",{style:{fontSize:12,color:"#6b7280"}},"円 / "+(packUnit||"本")+"（運賃・税込み）　掛率"),
+            E("input",{className:"inp",type:"number",step:"0.1",value:markup,onChange:function(e){setMarkup(e.target.value)},placeholder:"1.5",style:Object.assign({},inpS,{width:60,textAlign:"right"})}),
+            (Number(baseCost)>0 && Number(markup)>0) ? E("button",{type:"button",onClick:function(){ var v=Math.round(Number(baseCost)*Number(markup)/100)*100; setPackPrice(v); if(Number(packSize)>0) setPrice(Math.round(v/Number(packSize))); },style:{padding:"3px 8px",fontSize:11,borderRadius:4,border:"1px solid #bfdbfe",background:"#fff",color:"#1e40af",cursor:"pointer",fontWeight:600}},"→ 単品売値 ¥"+(Math.round(Number(baseCost)*Number(markup)/100)*100).toLocaleString()) : null,
+            (Number(baseCost)>0 && Number(packPrice)>0) ? E("span",{style:{fontSize:11,color:(Number(packPrice)/Number(baseCost))<1.3?"#dc2626":"#059669",fontWeight:600}},"現在 "+(Number(packPrice)/Number(baseCost)).toFixed(2)+"倍") : null))
         ) : null),
       E("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,borderTop:"1px solid #e5e7eb",paddingTop:12}},
         E("button",{className:"btn btn-secondary",onClick:onClose},"キャンセル"),
@@ -1820,7 +1844,8 @@ function DrugModal({ drug, onSave, onClose }) {
           onSave(Object.assign({}, d0 || {}, {
             id: drug?.id || Date.now(), name: name.trim(), category: cat || "その他", unit: unit || "本",
             pricePerUnit: p, cost: c, active: active, defaultDose: Number(defDose) || 1,
-            rxPrice: Number(rxPrice) || 0, isImport: isImport
+            packPrice: Number(packPrice) || 0, packUnit: packUnit || unit || "本", packSize: Number(packSize) || 1,
+            baseCost: Number(baseCost) || 0, markup: Number(markup) || 0, isImport: isImport
           }));
         }}, drug ? "更新" : "登録"))
     )
@@ -3008,8 +3033,7 @@ function GeneralKartePage({
   const drugTotal = drugRows.reduce((s, r) => {
     const d = drugsMaster.find(x => x.id === Number(r.drugId));
     if (!d) return s;
-    var pp = r.useRx && d.rxPrice ? d.rxPrice : d.pricePerUnit;
-    return s + Math.round(pp * (Number(r.dose) || 0));
+    return s + calcDrugLine(d, r.dose, r.useRx);
   }, 0);
   const vehicleFee = vehicleKm ? Math.round(Number(vehicleKm) * 120) : 0; // 請求計算(calcVisitTotal)と同じ 120円/km
   const currentTotal = visitFee + treatTotal + drugTotal + vehicleFee + Number(adjustFee || 0);
@@ -3029,7 +3053,7 @@ function GeneralKartePage({
       history,
       clinicalExam,
       treatments: [...selTreatments],
-      drugs: drugRows.filter(r => r.drugId).map(r => ({ drugId: Number(r.drugId), dose: Number(r.dose) || 0, memo: r.memo, useRx: r.useRx || false })),
+      drugs: drugRows.filter(r => r.drugId).map(r => { const dd = drugsMaster.find(x => x.id === Number(r.drugId)); return { drugId: Number(r.drugId), dose: Number(r.dose) || 0, memo: r.memo, useRx: r.useRx || false, fee: calcDrugLine(dd, r.dose, r.useRx), unitPrice: drugUnitPrice(dd, r.useRx), unit: r.useRx && dd ? (dd.packUnit || dd.unit) : (dd ? dd.unit : "") }; }),
       vehicleKm: Number(vehicleKm) || 0,
       adjustFee: Number(adjustFee) || 0,
       memo
@@ -3060,12 +3084,13 @@ function GeneralKartePage({
       history,
       clinicalExam,
       treatments: [...selTreatments],
-      drugs: drugRows.filter(r => r.drugId).map(r => ({
+      drugs: drugRows.filter(r => r.drugId).map(r => { const dd = drugsMaster.find(x => x.id === Number(r.drugId)); return {
         drugId: Number(r.drugId),
         dose: Number(r.dose) || 0,
         memo: r.memo,
-        useRx: r.useRx || false
-      })),
+        useRx: r.useRx || false,
+        fee: calcDrugLine(dd, r.dose, r.useRx), unitPrice: drugUnitPrice(dd, r.useRx), unit: r.useRx && dd ? (dd.packUnit || dd.unit) : (dd ? dd.unit : "")
+      }; }),
       vehicleKm: Number(vehicleKm) || 0,
       adjustFee: Number(adjustFee) || 0,
       memo
@@ -3779,8 +3804,9 @@ function GeneralKartePage({
   }, "\u6570\u91CF\u00D7\u5358\u4FA1\u3067\u8A08\u7B97\uFF08\u5358\u4F4D\u306F\u85AC\u54C1\u30DE\u30B9\u30BF\u30FC\u306E\u8ACB\u6C42\u5358\u4F4D\uFF09"), drugRows.map((row, i) => {
     const d = drugsMaster.find(x => x.id === Number(row.drugId));
     const dose = Number(row.dose) || 0;
-    const useRxPrice = row.useRx && d && d.rxPrice;
-    const activePrice = useRxPrice ? d.rxPrice : (d ? d.pricePerUnit : 0);
+    const useRxPrice = row.useRx && d && d.packPrice;
+    const activePrice = drugUnitPrice(d, row.useRx);
+    const rowUnit = useRxPrice ? (d.packUnit || d.unit) : (d ? d.unit : "");
     const lt = d ? Math.round(activePrice * dose) : 0;
     return /*#__PURE__*/React.createElement("div", {
       key: i,
@@ -3840,7 +3866,7 @@ function GeneralKartePage({
         fontSize: 9,
         color: "#9ca3af"
       }
-    }, "数量(" + (d.unit || "") + ")"), /*#__PURE__*/React.createElement("div", {
+    }, "数量(" + (rowUnit || "") + ")"), /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -3876,17 +3902,17 @@ function GeneralKartePage({
         padding: "4px 6px",
         borderRadius: 4
       }
-    }, "\xA5", (activePrice||0).toLocaleString(), "/", d.unit)),
-    d.rxPrice ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-      style: {fontSize: 9, color: row.useRx ? "#dc2626" : "#9ca3af"}
-    }, "置き薬"), /*#__PURE__*/React.createElement("label", {
+    }, "\xA5", (activePrice||0).toLocaleString(), "/", rowUnit)),
+    d.packPrice ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      style: {fontSize: 9, color: row.useRx ? "#dc2626" : "#9ca3af"}, title: "牧場にそのまま渡す（単品販売）: " + (d.packUnit || d.unit) + "単位 ¥" + d.packPrice
+    }, "単品"), /*#__PURE__*/React.createElement("label", {
       style: {display:"flex",alignItems:"center",gap:4,cursor:"pointer",padding:"3px 0"}
     }, /*#__PURE__*/React.createElement("input", {
       type: "checkbox",
       checked: row.useRx || false,
       onChange: function(){updateDrugRow(i, "useRx", !row.useRx)},
       style: {width:15,height:15}
-    }), /*#__PURE__*/React.createElement("span", {style:{fontSize:10,color:row.useRx?"#dc2626":"#9ca3af",fontWeight:row.useRx?700:400}}, row.useRx ? "¥"+d.rxPrice : ""))) : null,
+    }), /*#__PURE__*/React.createElement("span", {style:{fontSize:10,color:row.useRx?"#dc2626":"#9ca3af",fontWeight:row.useRx?700:400}}, row.useRx ? "¥"+Number(d.packPrice).toLocaleString()+"/"+(d.packUnit||d.unit) : "/"+(d.packUnit||d.unit)))) : null,
     /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
       style: {
         fontSize: 9,
@@ -7624,7 +7650,9 @@ function BillingPage({
 }
 
 // ═══════════════ MASTERS ═══════════════
-function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAddFarm, onEditFarm, onDeleteFarm, onAddHorse, onEditHorse, onDeleteHorse, onAddDrug, onEditDrug, onDeleteDrug, onUpdateDrug, onAddTreatment, onEditTreatment, onDeleteTreatment, breedingTreatments, setBreedingTreatments, purchaseHistory}) {
+function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAddFarm, onEditFarm, onDeleteFarm, onAddHorse, onEditHorse, onDeleteHorse, onAddDrug, onEditDrug, onDeleteDrug, onUpdateDrug, onMergeDrugs, onAddTreatment, onEditTreatment, onDeleteTreatment, breedingTreatments, setBreedingTreatments, purchaseHistory}) {
+  const [mergeSel, setMergeSel] = useState([]);        // 統合対象に選んだ薬品ID
+  const [mergeTarget, setMergeTarget] = useState(null); // 統合先の選択モーダル
   const [tab, setTab] = useState("farms");
   const [searchFarm, setSearchFarm] = useState("");
   const [searchHorse, setSearchHorse] = useState("");
@@ -7916,7 +7944,25 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
         chip("輸入薬" + (importCount > 0 ? "(" + importCount + ")" : ""), drugImportFilter, function(){ setDrugImportFilter(!drugImportFilter); }, {marginLeft: 4, background: drugImportFilter ? "#f59e0b" : "", color: drugImportFilter ? "#fff" : ""}),
         chip("アーカイブ" + (drugsMaster.filter(function(d){ return d.archived; }).length > 0 ? "(" + drugsMaster.filter(function(d){ return d.archived; }).length + ")" : ""), showArchivedDrugs, function(){ setShowArchivedDrugs(!showArchivedDrugs); }),
         E("div", {style: {flex: 1}}),
+        mergeSel.length > 0 && onMergeDrugs && E("button", {className: "btn btn-sm", style: {background: "#7c3aed", color: "#fff", border: "none"}, title: "選んだ薬品を1つに統合します（カルテの薬品行は統合先に付け替え、元の薬品はアーカイブ）", onClick: function(){ setMergeTarget({ids: mergeSel.slice(), target: ""}); }}, "⇉ 選択 " + mergeSel.length + " 件を統合…"),
+        mergeSel.length > 0 && E("button", {className: "btn btn-secondary btn-sm", onClick: function(){ setMergeSel([]); }}, "選択解除"),
         E("button", {className: "btn btn-primary btn-sm", onClick: onAddDrug}, "＋ 新規薬品")),
+      mergeTarget && E("div", {className: "modal-overlay", onClick: function(){ setMergeTarget(null); }},
+        E("div", {className: "modal", onClick: function(e){ e.stopPropagation(); }, style: {maxWidth: 560, padding: 20}},
+          E("h2", {style: {fontSize: 16, fontWeight: 700, marginBottom: 8}}, "薬品の統合"),
+          E("div", {style: {fontSize: 12, color: "#374151", marginBottom: 10, lineHeight: 1.6}},
+            "統合する薬品：", E("b", null, mergeTarget.ids.map(function(id){ var d = drugsMaster.find(function(x){ return x.id === id; }); return d ? d.name + "（" + d.unit + " ¥" + Number(d.pricePerUnit||0).toLocaleString() + "）" : id; }).join("、")),
+            E("div", {style: {marginTop: 6}}, "統合先の薬品を選んでください（残す方＝値段が正しい方）。カルテの薬品行は統合先に付け替えます。元の単位が統合先の単品単位（本など）と同じ行は「単品」扱いにします。金額が確定している行（FM取込分）はそのままです。")),
+          E(DrugSearchBox, {drugsMaster: drugsMaster, cases: cases, value: mergeTarget.target ? String(mergeTarget.target) : "", onSelect: function(did){ setMergeTarget(Object.assign({}, mergeTarget, {target: Number(did)})); }}),
+          mergeTarget.target ? E("div", {style: {marginTop: 8, fontSize: 12, color: "#1e40af", fontWeight: 600}}, "→ " + (drugsMaster.find(function(x){ return x.id === mergeTarget.target; }) || {}).name + " に統合") : null,
+          E("div", {style: {display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14}},
+            E("button", {className: "btn btn-secondary", onClick: function(){ setMergeTarget(null); }}, "キャンセル"),
+            E("button", {className: "btn btn-primary", disabled: !mergeTarget.target, onClick: function(){
+              var src = mergeTarget.ids.filter(function(id){ return id !== mergeTarget.target; });
+              if (src.length === 0) { alert("統合先と同じ薬品だけが選ばれています"); return; }
+              if (!confirm(src.length + "件を統合します。よろしいですか？")) return;
+              onMergeDrugs(src, mergeTarget.target); setMergeTarget(null); setMergeSel([]);
+            }}, "統合する")))),
       E("div", {style: {display: "flex", gap: 3, marginBottom: 6, flexWrap: "wrap", alignItems: "center"}},
         E("span", {style: {fontSize: 11, color: "#6b7280", marginRight: 2}}, "区分:"),
         E("button", {onClick: function(){ setDrugCatFilter(""); }, className: "tab-btn " + (drugCatFilter === "" ? "active" : ""), style: {padding: "2px 8px", fontSize: 10}}, "全区分"),
@@ -7925,18 +7971,22 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
       E("div", {className: "card", style: {overflow: "auto", maxHeight: "65vh"}},
         E("table", null,
           E("thead", null, E("tr", {style: {background: "#f9fafb"}},
-            useTh(), th("薬品名", "name"), th("区分", "category"), th("請求単位", "unit"), th("単価(税抜)", "pricePerUnit", true), th("よく使う", "active"), th("既定数量", "defaultDose", true), th("操作"))),
+            E("th", {style: {width: 24}, title: "統合する薬品を選ぶ"}, ""), useTh(), th("薬品名", "name"), th("区分", "category"), th("請求単位", "unit"), th("単価(税抜)", "pricePerUnit", true), th("単品売値", "packPrice", true), th("原価", "cost", true), th("よく使う", "active"), th("既定数量", "defaultDose", true), th("操作"))),
           E("tbody", null, sortData(filteredDrugs, sortKey, sortDir).map(function(d){
             var isEditing = editingDrugId === d.id;
             var hasStock = isDrugLinkedToPurchase(d);
             var cellInp = function(field, type, extra){ return E("input", Object.assign({type: type || "text", value: editDrugData[field] == null ? "" : editDrugData[field], onChange: function(e){ var v = e.target.value; setEditDrugData(Object.assign({}, editDrugData, ((field === "pricePerUnit" || field === "defaultDose") ? {[field]: Number(v) || 0} : {[field]: v}))); }, onKeyDown: function(e){ if (e.key === "Enter") saveDrug(); if (e.key === "Escape") cancelEditDrug(); }, style: Object.assign({width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: 4, fontSize: 11}, extra || {})})); };
-            return E("tr", {key: d.id, style: {background: isEditing ? "#fef3c7" : d.archived ? "#f3f4f6" : hasStock ? "#f0fdf4" : "", borderLeft: hasStock ? "3px solid #22c55e" : "", opacity: d.archived ? 0.7 : 1}}, useCell(d.id),
+            return E("tr", {key: d.id, style: {background: isEditing ? "#fef3c7" : mergeSel.indexOf(d.id) >= 0 ? "#ede9fe" : d.archived ? "#f3f4f6" : hasStock ? "#f0fdf4" : "", borderLeft: hasStock ? "3px solid #22c55e" : "", opacity: d.archived ? 0.7 : 1}},
+              E("td", {style: {textAlign: "center", padding: "2px"}}, E("input", {type: "checkbox", checked: mergeSel.indexOf(d.id) >= 0, onChange: function(e){ setMergeSel(e.target.checked ? mergeSel.concat([d.id]) : mergeSel.filter(function(x){ return x !== d.id; })); }, style: {cursor: "pointer"}})),
+              useCell(d.id),
               E("td", {style: {fontWeight: 600, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer"}, onDoubleClick: function(){ startEditDrug(d); }},
                 isEditing ? cellInp("name", "text", {fontWeight: 600}) : [d.archived && E("span", {key: "a", className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "アーカイブ済"), d.name, d.isImport && E("span", {key: "i", className: "badge badge-yellow", style: {fontSize: 9, marginLeft: 4}}, "輸入")]),
               E("td", null, E("select", {value: d.category || "", onChange: function(e){ onUpdateDrug(d.id, {category: e.target.value}); }, style: {fontSize: 11, padding: "2px 4px", border: "1px solid #e5e7eb", borderRadius: 4, background: "#f9fafb", cursor: "pointer", minHeight: 28, WebkitAppearance: "menulist"}},
                 E("option", {value: ""}, "（未分類）"), DRUG_CATEGORIES.map(function(c){ return E("option", {key: c, value: c}, c); }))),
               E("td", {style: {fontSize: 12, cursor: "pointer"}, onDoubleClick: function(){ startEditDrug(d); }}, isEditing ? cellInp("unit") : d.unit),
               E("td", {style: {textAlign: "right", fontWeight: 600, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap"}, onDoubleClick: function(){ startEditDrug(d); }}, isEditing ? cellInp("pricePerUnit", "number", {textAlign: "right", fontWeight: 600}) : "¥" + (d.pricePerUnit || 0).toLocaleString() + " /" + (d.unit || "")),
+              E("td", {style: {textAlign: "right", fontSize: 11, whiteSpace: "nowrap", cursor: "pointer"}, title: d.baseCost ? "基準原価 ¥" + Number(d.baseCost).toLocaleString() + "/" + (d.packUnit||d.unit) + (d.markup ? "　掛率 " + d.markup : "") : "", onDoubleClick: function(){ onEditDrug(d); }}, d.packPrice ? ("¥" + Number(d.packPrice).toLocaleString() + " /" + (d.packUnit || d.unit) + ((d.packSize||1) > 1 ? "(" + d.packSize + d.unit + ")" : "")) : E("span", {style: {color: "#d1d5db"}}, "—")),
+              E("td", {style: {textAlign: "right", fontSize: 11, whiteSpace: "nowrap", color: "#6b7280"}, title: "仕入単価（円/" + d.unit + "）"}, d.cost ? "¥" + Number(d.cost).toLocaleString() : E("span", {style: {color: "#d1d5db"}}, "—")),
               E("td", {style: {textAlign: "center"}}, E("input", {type: "checkbox", checked: !!d.active, onChange: function(e){ onUpdateDrug(d.id, {active: e.target.checked}); }, style: {width: 16, height: 16, cursor: "pointer"}})),
               E("td", {style: {textAlign: "right", fontSize: 12, cursor: "pointer"}, onDoubleClick: function(){ startEditDrug(d); }}, isEditing ? cellInp("defaultDose", "number", {textAlign: "right"}) : (d.defaultDose || 1)),
               E("td", {style: {whiteSpace: "nowrap"}},
@@ -8088,8 +8138,115 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
 }
 
 // ═══════════════ 仕入れ管理 ═══════════════
-function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, cases, onRegisterDrug }) {
+function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, cases, onRegisterDrug, onUpdateDrug }) {
   var E = React.createElement;
+  var [linkEdit, setLinkEdit] = useState(null);   // 紐づけ編集中の商品キー
+  var [markupSort, setMarkupSort] = useState("ratio");
+
+  // ── 写真読取JSON取込 ─────────────────────────────────────────
+  // 形式: {"invoices":[{supplier, invoiceNo, date, currency:"JPY"|"AUD", fxRate, allocateExtras, importTaxJPY, lines:[{code,name,spec,qty,unitPrice,amount,kind:"商品"|"付帯"|"外注"|"手数料",slipNo,date,maker,batch,expiry,drugId,packQty}]}]}
+  // 外貨の伝票は「付帯」行（運賃・手数料）を商品行に金額比で按分し、1仕入単位あたりの着地原価(円)を landedUnit に持つ
+  function buildRecordsFromInvoice(inv) {
+    var rate = inv.currency && inv.currency !== "JPY" ? (Number(inv.fxRate) || 0) : 1;
+    if (!rate) throw new Error(inv.supplier + " " + inv.invoiceNo + ": 為替レート(fxRate)がありません");
+    var lines = (inv.lines || []).map(function(l){ return Object.assign({}, l, {kind: l.kind || "商品", qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0, amount: l.amount != null ? Number(l.amount) : (Number(l.qty)||0) * (Number(l.unitPrice)||0)}); });
+    var goods = lines.filter(function(l){ return l.kind === "商品"; });
+    var extras = lines.filter(function(l){ return l.kind === "付帯" || l.kind === "手数料"; });
+    var goodsTotal = goods.reduce(function(a,l){ return a + l.amount; }, 0);
+    var extrasTotal = extras.reduce(function(a,l){ return a + l.amount; }, 0);
+    var allocate = inv.allocateExtras != null ? !!inv.allocateExtras : (rate !== 1);   // 既定: 外貨は按分、円は按分しない
+    var importTax = Number(inv.importTaxJPY) || 0;   // 通関時に別途払った輸入消費税など（円）
+    var stamp = todayJST();
+    return lines.map(function(l, i) {
+      var isGoods = l.kind === "商品";
+      var alloc = (isGoods && allocate && goodsTotal > 0) ? (extrasTotal * l.amount / goodsTotal) : 0;
+      var taxAlloc = (isGoods && goodsTotal > 0) ? (importTax * l.amount / goodsTotal) : 0;
+      var amountJPY = Math.round(l.amount * rate);
+      var landed = isGoods ? Math.round((l.amount + alloc) * rate + taxAlloc) : 0;
+      return {
+        id: "ph_" + (inv.supplier||"") + "_" + (inv.invoiceNo||"") + "_" + i,
+        supplier: inv.supplier || "", invoiceNo: String(inv.invoiceNo || ""), slipNo: String(l.slipNo || inv.invoiceNo || ""),
+        date: l.date || inv.date || "", maker: l.maker || "", code: String(l.code || ""), name: l.name || "", spec: l.spec || "",
+        qty: l.qty, unitPrice: rate === 1 ? l.unitPrice : Math.round(l.unitPrice * rate * 100) / 100,
+        amount: amountJPY, tax: rate === 1 ? (l.tax != null ? Number(l.tax) : Math.floor(amountJPY * 0.1)) : 0,
+        currency: inv.currency || "JPY", fxRate: rate, fxUnitPrice: l.unitPrice, fxAmount: l.amount,
+        kind: l.kind, extraAlloc: Math.round(alloc * rate + taxAlloc), landed: landed, landedUnit: (isGoods && l.qty > 0) ? Math.round(landed / l.qty * 100) / 100 : 0,
+        batch: l.batch || "", expiry: l.expiry || "", drugId: l.drugId || null, packQty: l.packQty || null,
+        source: "photo", importedAt: stamp
+      };
+    });
+  }
+  function handleJsonImport(e) {
+    var file = e.target.files[0]; if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        var data = JSON.parse(ev.target.result);
+        var invoices = Array.isArray(data) ? data : (data.invoices || [data]);
+        var added = 0, replaced = 0, skipped = [];
+        var next = purchaseHistory.slice();
+        invoices.forEach(function(inv) {
+          var recs = buildRecordsFromInvoice(inv);
+          var key = function(r){ return (r.supplier||"") + "|" + (r.invoiceNo||""); };
+          var existing = next.filter(function(r){ return key(r) === (inv.supplier||"") + "|" + String(inv.invoiceNo||""); });
+          if (existing.length > 0) {
+            if (confirm((inv.supplier||"") + " 伝票 " + (inv.invoiceNo||"") + " は取込済み（" + existing.length + "行）です。置き換えますか？\n（キャンセル＝この伝票はスキップ）")) {
+              var keep = {}; existing.forEach(function(r){ var k = (r.code||"") + "|" + (r.name||""); if (r.drugId) keep[k] = {drugId: r.drugId, packQty: r.packQty}; });
+              next = next.filter(function(r){ return key(r) !== (inv.supplier||"") + "|" + String(inv.invoiceNo||""); });
+              recs.forEach(function(r){ var k = (r.code||"") + "|" + (r.name||""); if (!r.drugId && keep[k]) { r.drugId = keep[k].drugId; r.packQty = keep[k].packQty; } });
+              next = next.concat(recs); replaced++;
+            } else { skipped.push(inv.invoiceNo); }
+          } else {
+            // 同じ業者・商品の既存紐づけを引き継ぐ
+            recs.forEach(function(r){
+              if (r.drugId) return;
+              var prev = next.find(function(x){ return x.supplier === r.supplier && x.drugId && ((r.code && x.code === r.code) || x.name === r.name); });
+              if (prev) { r.drugId = prev.drugId; r.packQty = prev.packQty; }
+            });
+            next = next.concat(recs); added++;
+          }
+        });
+        onUpdateHistory(function(){ return next; });
+        showToast("仕入取込: " + added + "伝票追加" + (replaced ? "・" + replaced + "伝票置換" : "") + (skipped.length ? "・スキップ " + skipped.join(",") : ""));
+      } catch (err) { alert("取込エラー: " + err.message); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+  // ── 商品 ⇔ 薬品マスターの紐づけ（同じ業者＋商品コード/名の全行に適用）──
+  function productKey(r) { return (r.supplier||"") + "|" + (r.code || r.name || ""); }
+  function setProductLink(r, drugId, packQty) {
+    var k = productKey(r);
+    onUpdateHistory(function(prev){ return prev.map(function(x){ return productKey(x) === k ? Object.assign({}, x, {drugId: drugId || null, packQty: packQty || null}) : x; }); });
+  }
+  // 商品ごとの最新着地原価（円／仕入単位）
+  var latestLanded = useMemo(function() {
+    var m = {};
+    purchaseHistory.forEach(function(r) {
+      if (r.kind && r.kind !== "商品") return;
+      var k = productKey(r);
+      var lu = r.landedUnit || r.unitPrice || 0;
+      if (!m[k] || (r.date||"") > m[k].date) m[k] = {date: r.date||"", landedUnit: lu, qty: r.qty, drugId: r.drugId, packQty: r.packQty, name: r.name, spec: r.spec, supplier: r.supplier, code: r.code, currency: r.currency || "JPY", fxRate: r.fxRate || 1};
+    });
+    return m;
+  }, [purchaseHistory]);
+  // 「仕入単価をマスターに反映」: 紐づけ済み商品の最新着地原価 → drug.cost（円/請求単位）・baseCost（円/単品単位）
+  function applyCostsToMaster() {
+    if (!onUpdateDrug) return;
+    var n = 0, lines = [];
+    Object.values(latestLanded).forEach(function(x) {
+      if (!x.drugId || !x.landedUnit) return;
+      var d = drugsMaster.find(function(dd){ return dd.id === Number(x.drugId); }); if (!d) return;
+      var packQty = Number(x.packQty) || 1;                    // 仕入1単位 ＝ 請求単位 packQty 個
+      var costUnit = Math.round(x.landedUnit / packQty * 100) / 100;   // 円/請求単位
+      var baseCost = Math.round(costUnit * (Number(d.packSize) || 1)); // 円/単品単位
+      if (d.cost === costUnit && d.baseCost === baseCost) return;
+      onUpdateDrug(d.id, {cost: costUnit, baseCost: baseCost, costUpdatedAt: x.date, supplier: x.supplier, supplierCode: x.code});
+      n++; lines.push(d.name + ": ¥" + costUnit + "/" + d.unit + (d.packSize > 1 ? "（¥" + baseCost.toLocaleString() + "/" + (d.packUnit||"本") + "）" : ""));
+    });
+    if (n === 0) { alert("更新する原価はありません（紐づけ済みで原価が変わった商品なし）"); return; }
+    alert(n + "品目の仕入単価・基準原価を更新しました\n\n" + lines.slice(0, 30).join("\n") + (lines.length > 30 ? "\n…" : ""));
+  }
   var [search, setSearch] = useState("");
   var [filterYear, setFilterYear] = useState("");
   var [filterMonth, setFilterMonth] = useState("");
@@ -8395,7 +8552,11 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
       E("label", {className:"btn",style:{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}},
         importing ? "⏳ インポート中..." : "📥 Excelインポート",
         E("input", {type:"file",accept:".xlsx,.xls,.csv",style:{display:"none"},onChange:handleImport,disabled:importing})),
+      E("label", {className:"btn btn-primary",style:{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6},title:"請求書・インボイスの写真をClaudeで読み取ったJSONを取り込みます（伝票番号で重複チェック、外貨は為替と運賃按分で着地原価を計算）"},
+        "📷 写真読取JSON取込",
+        E("input", {type:"file",accept:".json,application/json",style:{display:"none"},onChange:handleJsonImport})),
       E("button", {className:"btn",onClick:function(){setShowAddModal(true);}}, "＋ 手動追加"),
+      onUpdateDrug && E("button", {className:"btn btn-secondary",onClick:applyCostsToMaster,title:"紐づけ済み商品の最新の着地原価を薬品マスターの仕入単価・基準原価に書き込みます"}, "⇒ 仕入単価をマスターに反映"),
       suppliers.length > 0 && E("div", {style:{display:"flex",gap:6,flexWrap:"wrap",marginLeft:8}},
         suppliers.map(function(s) {
           var cnt = purchaseHistory.filter(function(r){return r.supplier===s;}).length;
@@ -8477,7 +8638,9 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
     E("div", {style:{display:"flex",gap:4,marginBottom:16}},
       E("button", {className:"tab-btn"+(viewTab==="list"?" active":""),onClick:function(){setViewTab("list");}}, "📋 仕入れ履歴"),
       E("button", {className:"tab-btn"+(viewTab==="summary"?" active":""),onClick:function(){setViewTab("summary");}}, "📊 商品別集計"),
-      E("button", {className:"tab-btn"+(viewTab==="inventory"?" active":""),onClick:function(){setViewTab("inventory");}}, "📦 薬事台帳")),
+      E("button", {className:"tab-btn"+(viewTab==="inventory"?" active":""),onClick:function(){setViewTab("inventory");}}, "📦 薬事台帳"),
+      E("button", {className:"tab-btn"+(viewTab==="link"?" active":""),onClick:function(){setViewTab("link");}}, "🔗 紐づけ・原価"),
+      E("button", {className:"tab-btn"+(viewTab==="markup"?" active":""),onClick:function(){setViewTab("markup");}}, "💹 売値チェック")),
 
     // 期間切替ボタン
     E("div", {style:{display:"flex",gap:4,marginBottom:8}},
@@ -8557,6 +8720,7 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
               sortHeader("数量","qty",50),
               E("th", {style:{textAlign:"right"}},"単価"),
               sortHeader("金額","amount",90),
+              E("th", {style:{textAlign:"right",fontSize:11},title:"運賃・手数料・輸入消費税を按分した1仕入単位あたりの原価（円）"},"着地原価/単位"),
               E("th", {style:{textAlign:"right",fontSize:11}},"税額"),
               E("th", {style:{textAlign:"left",fontSize:11}},"伝票No")
             )),
@@ -8571,6 +8735,7 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
                   E("td", {style:{textAlign:"right",color:r.qty<0?"#ef4444":"#374151"}}, r.qty),
                   E("td", {style:{textAlign:"right",fontSize:12}}, "¥"+(r.unitPrice||0).toLocaleString()),
                   E("td", {style:{textAlign:"right",fontWeight:600,color:r.amount<0?"#ef4444":"#1e40af"}}, "¥"+(r.amount||0).toLocaleString()),
+              E("td", {style:{textAlign:"right",fontSize:11,color:r.kind&&r.kind!=="商品"?"#9ca3af":"#374151",whiteSpace:"nowrap"},title:(r.currency&&r.currency!=="JPY")?(r.currency+" "+(r.fxUnitPrice||0)+" × "+r.fxRate+(r.extraAlloc?"＋付帯¥"+Number(r.extraAlloc).toLocaleString():"")):""}, r.kind&&r.kind!=="商品" ? r.kind : (r.landedUnit ? "¥"+Number(r.landedUnit).toLocaleString() : "")),
                   E("td", {style:{textAlign:"right",fontSize:11,color:"#9ca3af"}}, "¥"+(r.tax||0).toLocaleString()),
                   E("td", {style:{fontSize:11,color:"#9ca3af"}}, r.slipNo||"")
                 );
@@ -8656,6 +8821,75 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
     ),
 
     // ═══ 薬事台帳タブ ═══
+    // ═══ 紐づけ・原価タブ ═══
+    viewTab === "link" && (function(){
+      var rows = Object.keys(latestLanded).map(function(k){ return Object.assign({key:k}, latestLanded[k]); })
+        .filter(function(x){ return !filterSupplier || x.supplier === filterSupplier; })
+        .filter(function(x){ return !search || (x.name||"").toLowerCase().includes(search.toLowerCase()) || (x.code||"").includes(search); })
+        .sort(function(a,b){ return (a.drugId?1:0)-(b.drugId?1:0) || (a.supplier||"").localeCompare(b.supplier||"") || (a.name||"").localeCompare(b.name||"","ja"); });
+      var linked = rows.filter(function(x){ return x.drugId; }).length;
+      return E("div", null,
+        E("div", {style:{fontSize:12,color:"#6b7280",marginBottom:10,lineHeight:1.6}},
+          "仕入商品を薬品マスターに紐づけ、「仕入1単位＝請求単位いくつ」を入れると、着地原価が請求単位あたりの仕入単価になります（例: Sedator 1本＝20 ml、マイシリン・ゾル 1箱＝10 本）。",
+          E("b", null, " " + linked + "/" + rows.length + " 商品が紐づけ済み"),
+          "。紐づけ後に上の「仕入単価をマスターに反映」を押してください。"),
+        E("div", {style:{overflowX:"auto"}}, E("table", {style:{width:"100%",fontSize:12}},
+          E("thead", null, E("tr", {style:{background:"#f9fafb"}},
+            E("th", {style:{textAlign:"left"}}, "業者"), E("th", {style:{textAlign:"left"}}, "商品（コード）"), E("th", {style:{textAlign:"left"}}, "規格"),
+            E("th", {style:{textAlign:"right"}}, "最新着地原価/仕入単位"), E("th", {style:{textAlign:"left"}}, "薬品マスター"), E("th", {style:{textAlign:"right"}}, "仕入1単位＝"), E("th", {style:{textAlign:"right"}}, "→ 原価/請求単位"))),
+          E("tbody", null, rows.map(function(x){
+            var d = x.drugId ? drugsMaster.find(function(dd){ return dd.id === Number(x.drugId); }) : null;
+            var pq = Number(x.packQty) || 1;
+            var isEd = linkEdit === x.key;
+            return E("tr", {key:x.key, style:{background: d ? "" : "#fffbeb"}},
+              E("td", null, x.supplier),
+              E("td", {style:{fontWeight:600}}, x.name, x.code ? E("span", {style:{color:"#9ca3af",fontWeight:400,marginLeft:4}}, "(" + x.code + ")") : null),
+              E("td", {style:{color:"#6b7280"}}, x.spec || ""),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap"}}, "¥" + Number(x.landedUnit||0).toLocaleString(), x.currency !== "JPY" ? E("div", {style:{fontSize:10,color:"#9ca3af"}}, x.currency + " @" + x.fxRate) : null, E("div", {style:{fontSize:10,color:"#9ca3af"}}, x.date)),
+              E("td", null, isEd
+                ? E(DrugSearchBox, {drugsMaster: drugsMaster, cases: cases, value: x.drugId ? String(x.drugId) : "", onSelect: function(did){ setProductLink(x, Number(did), pq); setLinkEdit(null); }})
+                : E("span", {style:{cursor:"pointer",color: d ? "#111827" : "#b45309",textDecoration:"underline dotted"}, onClick:function(){ setLinkEdit(x.key); }}, d ? d.name + "（" + d.unit + "）" : "未紐づけ — クリックして選択")),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap"}}, d ? [E("input", {key:"pq", type:"number", step:"any", value: x.packQty == null ? "" : x.packQty, placeholder:"1", onChange:function(e){ setProductLink(x, x.drugId, e.target.value === "" ? null : Number(e.target.value)); }, style:{width:64,textAlign:"right",padding:"2px 4px",border:"1px solid #d1d5db",borderRadius:4}}), " " + d.unit] : ""),
+              E("td", {style:{textAlign:"right",fontWeight:600,whiteSpace:"nowrap"}}, d && x.landedUnit ? "¥" + (Math.round(x.landedUnit / pq * 100) / 100).toLocaleString() + "/" + d.unit + (d.cost ? E("div", {key:"c", style:{fontSize:10,fontWeight:400,color: Math.abs(d.cost - x.landedUnit/pq) < 0.5 ? "#059669" : "#dc2626"}}, "マスター ¥" + Number(d.cost).toLocaleString()) : "") : ""));
+          })))));
+    })(),
+    // ═══ 売値チェックタブ ═══
+    viewTab === "markup" && (function(){
+      // 対象: 仕入れ管理から原価を反映した薬品（costUpdatedAt）か基準原価を手入力した薬品。FM薬剤マスター由来の cost は規格（箱・本）あたりで請求単位と合わないため除外
+      var rows = drugsMaster.filter(function(d){ return !d.archived && ((d.costUpdatedAt && Number(d.cost) > 0) || Number(d.baseCost) > 0); }).map(function(d){
+        var costUnit = Number(d.cost) || (Number(d.baseCost) ? Number(d.baseCost) / (Number(d.packSize) || 1) : 0);
+        var baseCost = Number(d.baseCost) || Math.round(costUnit * (Number(d.packSize) || 1));
+        var rTreat = costUnit > 0 ? Number(d.pricePerUnit) / costUnit : 0;
+        var rPack = (baseCost > 0 && Number(d.packPrice) > 0) ? Number(d.packPrice) / baseCost : 0;
+        var target = Number(d.markup) || (d.isImport ? (d.category === "注射薬" ? 1.6 : 1.5) : 1.3);
+        var worst = rPack > 0 ? Math.min(rPack, rTreat || rPack) : rTreat;
+        return {d:d, costUnit:costUnit, baseCost:baseCost, rTreat:rTreat, rPack:rPack, target:target, worst:worst, low: worst > 0 && worst < target - 0.05};
+      }).filter(function(x){ return !search || x.d.name.toLowerCase().includes(search.toLowerCase()); })
+        .sort(function(a,b){ return markupSort === "name" ? a.d.name.localeCompare(b.d.name,"ja") : markupSort === "cost" ? b.baseCost - a.baseCost : (a.worst||99) - (b.worst||99); });
+      var lowCount = rows.filter(function(x){ return x.low; }).length;
+      var hdr = function(l,k){ return E("th", {style:{cursor:"pointer",whiteSpace:"nowrap",textAlign:k==="name"?"left":"right"}, onClick:function(){ setMarkupSort(k); }}, l + (markupSort===k?" ▼":"")); };
+      return E("div", null,
+        E("div", {style:{fontSize:12,color:"#6b7280",marginBottom:10,lineHeight:1.6}},
+          "原価（運賃・税込み）に対する売値の倍率です。対象は仕入れ管理で紐づけて原価を反映した薬品と、基準原価を入力した薬品。目標掛率は薬品ごとの設定、未設定なら 国内1.3／輸入の指示薬1.5／輸入の注射薬1.6。",
+          lowCount > 0 ? E("span", {style:{color:"#dc2626",fontWeight:700}}, " 目標を下回る品目 " + lowCount + "件") : E("span", {style:{color:"#059669",fontWeight:700}}, " すべて目標以上")),
+        E("div", {style:{overflowX:"auto"}}, E("table", {style:{width:"100%",fontSize:12}},
+          E("thead", null, E("tr", {style:{background:"#f9fafb"}}, hdr("薬品","name"), E("th", null, "区分"), hdr("原価/請求単位","cost"), E("th", {style:{textAlign:"right"}}, "治療単価"), E("th", {style:{textAlign:"right"}}, "倍率"), E("th", {style:{textAlign:"right"}}, "原価/単品"), E("th", {style:{textAlign:"right"}}, "単品売値"), hdr("倍率","ratio"), E("th", {style:{textAlign:"right"}}, "目標"), E("th", null, "判定"))),
+          E("tbody", null, rows.map(function(x){
+            var d = x.d; var fmt = function(v){ return v ? v.toFixed(2) : "—"; };
+            var col = function(r){ return !r ? "#9ca3af" : r < x.target - 0.05 ? "#dc2626" : r < x.target + 0.2 ? "#b45309" : "#059669"; };
+            return E("tr", {key:d.id, style:{background: x.low ? "#fef2f2" : ""}},
+              E("td", {style:{fontWeight:600}}, d.name, d.isImport ? E("span", {className:"badge badge-purple", style:{marginLeft:4,fontSize:9}}, "輸入") : null),
+              E("td", {style:{color:"#6b7280"}}, d.category || ""),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap"}}, x.costUnit ? "¥" + Number(x.costUnit).toLocaleString() + "/" + d.unit : "—"),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap"}}, "¥" + Number(d.pricePerUnit||0).toLocaleString() + "/" + d.unit),
+              E("td", {style:{textAlign:"right",fontWeight:700,color:col(x.rTreat)}}, fmt(x.rTreat)),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap",color:"#6b7280"}}, x.baseCost && (d.packSize > 1 || d.packPrice) ? "¥" + Number(x.baseCost).toLocaleString() + "/" + (d.packUnit||d.unit) : "—"),
+              E("td", {style:{textAlign:"right",whiteSpace:"nowrap"}}, d.packPrice ? "¥" + Number(d.packPrice).toLocaleString() + "/" + (d.packUnit||d.unit) : "—"),
+              E("td", {style:{textAlign:"right",fontWeight:700,color:col(x.rPack)}}, fmt(x.rPack)),
+              E("td", {style:{textAlign:"right"}}, "×" + x.target.toFixed(1)),
+              E("td", null, x.low ? E("span", {className:"badge badge-red"}, "要見直し") : x.worst ? E("span", {className:"badge badge-green"}, "OK") : ""));
+          })))));
+    })(),
     viewTab === "inventory" && E("div", null,
       inventoryData.length === 0
         ? E("div", {style:{textAlign:"center",padding:40,color:"#9ca3af"}},
@@ -9646,8 +9880,9 @@ function PharmaInputPage({
     };
     if (field === "drugId" || field === "dose") {
       const d = drugsMaster.find(x => x.id === Number(nr.drugId));
-      var pp = d ? (d.rxPrice || d.pricePerUnit) : 0;
+      var pp = d ? (d.packPrice || d.pricePerUnit) : 0;   // 薬事（販売）は単品売値が既定
       nr.price = d ? Math.round(pp * Number(nr.dose || 0)) : 0;
+      nr.unit = d ? (d.packPrice ? (d.packUnit || d.unit) : d.unit) : "";
     }
     return nr;
   }));
@@ -9935,7 +10170,7 @@ function PharmaInputPage({
         color: "#6b7280"
       }
     }, "/", d.unit),
-    d.rxPrice ? /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#dc2626",background:"#fef2f2",padding:"2px 6px",borderRadius:4}}, "処方") : null,
+    d.packPrice ? /*#__PURE__*/React.createElement("span", {style:{fontSize:9,color:"#dc2626",background:"#fef2f2",padding:"2px 6px",borderRadius:4}, title:"単品販売 ¥"+Number(d.packPrice).toLocaleString()+"/"+(d.packUnit||d.unit)}, "単品 ¥"+Number(d.packPrice).toLocaleString()) : null,
     /*#__PURE__*/React.createElement("span", {
       style: {
         marginLeft: "auto",
@@ -11627,7 +11862,8 @@ function App() {
           onUpdateHistory: setPurchaseHistory,
           drugsMaster: drugsMaster,
           cases: cases,
-          onRegisterDrug: function(drugData) { setDrugsMaster(function(p) { return p.concat([drugData]); }); }
+          onRegisterDrug: function(drugData) { setDrugsMaster(function(p) { return p.concat([drugData]); }); },
+          onUpdateDrug: function(id, updates) { setDrugsMaster(function(p) { return p.map(function(x){ return x.id === id ? Object.assign({}, x, updates) : x; }); }); }
         });
       case "reports":
         return renderReports();
@@ -11703,6 +11939,30 @@ function App() {
           },
           onUpdateDrug: (id, updates) => {
             setDrugsMaster(p => p.map(x => x.id === id ? {...x, ...updates} : x));
+          },
+          // 薬品の統合: カルテ・薬事の薬品行を統合先IDに付け替え、元はアーカイブ（unit が統合先の単品単位と一致する行は単品扱い）
+          onMergeDrugs: (sourceIds, targetId) => {
+            const target = drugsMaster.find(x => x.id === targetId); if (!target) return;
+            const srcSet = new Set(sourceIds.map(Number));
+            const srcById = {}; drugsMaster.forEach(d => { if (srcSet.has(d.id)) srcById[d.id] = d; });
+            let rows = 0;
+            const conv = (r) => {
+              if (!srcSet.has(Number(r.drugId))) return r;
+              const sd = srcById[Number(r.drugId)] || {}; rows++;
+              const asPack = !!(target.packPrice && (sd.unit || "") !== (target.unit || "") && (sd.unit || "") === (target.packUnit || ""));
+              const nr = Object.assign({}, r, { drugId: targetId, mergedFrom: Number(r.drugId) });
+              if (asPack) nr.useRx = true;
+              if (nr.fee == null && nr.price == null) { nr.fee = calcDrugLine(sd, r.dose, false); }   // 旧単価での金額を固定（請求を変えない）
+              return nr;
+            };
+            setCases(prev => prev.map(c => {
+              let changed = false;
+              const visits = (c.visits || []).map(v => { const ds = (v.drugs || []).map(conv); if (ds.some((d, i) => d !== (v.drugs || [])[i])) { changed = true; return Object.assign({}, v, {drugs: ds}); } return v; });
+              const items = (c.pharmaItems || []).map(pi => { if (!srcSet.has(Number(pi.drugId))) return pi; changed = true; return Object.assign({}, pi, {drugId: targetId, mergedFrom: Number(pi.drugId)}); });
+              return changed ? Object.assign({}, c, {visits, pharmaItems: items, updatedAt: new Date().toISOString()}) : c;
+            }));
+            setDrugsMaster(p => p.map(x => srcSet.has(x.id) ? Object.assign({}, x, {archived: true, active: false, mergedInto: targetId}) : x));
+            setTimeout(() => showToast(sourceIds.length + "件を「" + target.name + "」に統合しました（カルテ " + rows + " 行を付け替え）"), 50);
           },
           onDeleteDrug: id => {
             const d = drugsMaster.find(x => x.id === id);
