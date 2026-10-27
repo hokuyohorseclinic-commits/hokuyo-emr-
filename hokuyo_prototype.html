@@ -1852,6 +1852,154 @@ function DrugModal({ drug, onSave, onClose }) {
   );
 }
 
+// ═══════════════ 一般カルテ 一括作成（予防接種・駆虫など同内容を複数頭に）═══════════════
+function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, onBack, onSaveMany, currentVet }) {
+  const E = React.createElement;
+  const [farmId, setFarmId] = useState("");
+  const [selIds, setSelIds] = useState([]);
+  const [visitDate, setVisitDate] = useState(todayJST());
+  const [visitType, setVisitType] = useState("再診");
+  const [diagnosis, setDiagnosis] = useState("");
+  const [caseStatus, setCaseStatus] = useState("診療終了");
+  const [selTreat, setSelTreat] = useState([]);
+  const [drugRows, setDrugRows] = useState([{drugId:"", dose:"", memo:"", useRx:false}]);
+  const [vehicleKm, setVehicleKm] = useState("");
+  const [kmMode, setKmMode] = useState("first");   // first: 1頭目だけ / each: 全頭
+  const [memo, setMemo] = useState("");
+  const [sexFilter, setSexFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const farm = farms.find(f => f.id === Number(farmId));
+  const farmHorses = useMemo(() => {
+    if (!farmId) return [];
+    return horses.filter(h => h.farmId === Number(farmId) && !h.archived)
+      .filter(h => !sexFilter || (h.sex || "") === sexFilter)
+      .filter(h => !search || (h.name || "").includes(search))
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja"));
+  }, [horses, farmId, sexFilter, search]);
+  const lastVisitOf = useMemo(() => {
+    const m = {};
+    cases.forEach(c => { if (c.type !== "一般") return; (c.visits || []).forEach(v => { if (!m[c.horseId] || v.date > m[c.horseId]) m[c.horseId] = v.date; }); });
+    return m;
+  }, [cases]);
+  const toggle = id => setSelIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const visitFee = visitType === "初診" ? 1500 : visitType === "再診" ? 750 : 0;
+  const treatTotal = selTreat.reduce((a, t) => a + (t.amount || 0), 0);
+  const drugTotal = drugRows.reduce((a, r) => { const d = drugsMaster.find(x => x.id === Number(r.drugId)); return a + (d ? calcDrugLine(d, r.dose, r.useRx) : 0); }, 0);
+  const perHorse = visitFee + treatTotal + drugTotal;
+  const kmFee = vehicleKm ? Math.round(Number(vehicleKm) * 120) : 0;
+  const total = perHorse * selIds.length + (kmFee ? (kmMode === "each" ? kmFee * selIds.length : kmFee) : 0);
+  // 処置: 使用頻度順
+  const treatSorted = useMemo(() => {
+    const cnt = {};
+    cases.forEach(c => { if (c.type === "一般") (c.visits || []).forEach(v => (v.treatments || []).forEach(t => { const k = t.name || t.treatmentId; cnt[k] = (cnt[k] || 0) + 1; })); });
+    return treatmentsMaster.slice().sort((a, b) => (cnt[b.name] || cnt[b.id] || 0) - (cnt[a.name] || cnt[a.id] || 0));
+  }, [treatmentsMaster, cases]);
+  const [showAllTreat, setShowAllTreat] = useState(false);
+  const updRow = (i, f, v) => setDrugRows(p => p.map((r, j) => j === i ? Object.assign({}, r, {[f]: v}) : r));
+  const create = () => {
+    if (!farmId) { alert("牧場を選んでください"); return; }
+    if (selIds.length === 0) { alert("馬を選んでください"); return; }
+    if (!diagnosis) { alert("病名を入力してください（例: 予防接種、駆虫）"); return; }
+    if (!confirm(farm.name + " の " + selIds.length + " 頭に「" + diagnosis + "」のカルテを作成します（1頭 ¥" + perHorse.toLocaleString() + "、合計 ¥" + total.toLocaleString() + "）。よろしいですか？")) return;
+    const base = Date.now();
+    const drugs = drugRows.filter(r => r.drugId).map(r => { const d = drugsMaster.find(x => x.id === Number(r.drugId)); return { drugId: Number(r.drugId), dose: Number(r.dose) || 0, memo: r.memo || "", useRx: !!r.useRx, fee: calcDrugLine(d, r.dose, r.useRx), unitPrice: drugUnitPrice(d, r.useRx), unit: r.useRx && d ? (d.packUnit || d.unit) : (d ? d.unit : "") }; });
+    const newCases = selIds.map((hid, i) => ({
+      id: base + i,
+      type: "一般",
+      horseId: hid,
+      farmId: Number(farmId),
+      diagnosis,
+      caseStatus,
+      openDate: visitDate,
+      vet: currentVet || "佐藤",
+      batchId: "batch_" + base,
+      visits: [{
+        date: visitDate, visitType, visitFee,
+        symptoms: [], vitals: {t: "", p: "", r: ""}, history: "", clinicalExam: "",
+        treatments: selTreat.map(t => Object.assign({}, t)),
+        drugs: drugs.map(d => Object.assign({}, d)),
+        vehicleKm: vehicleKm && (kmMode === "each" || i === 0) ? Number(vehicleKm) : 0,
+        adjustFee: 0, memo
+      }]
+    }));
+    onSaveMany(newCases);
+    showToast("✓ " + farm.name + " " + selIds.length + "頭のカルテを作成しました（" + diagnosis + "）");
+    setSelIds([]);
+  };
+  const card = (title, body) => E("div", {className: "card", style: {padding: 16, marginBottom: 14}}, E("h3", {style: {fontSize: 14, fontWeight: 700, marginBottom: 10}}, title), body);
+  return E("div", null,
+    E("div", {style: {display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16}},
+      E("div", null,
+        E("button", {className: "btn btn-secondary btn-sm", onClick: onBack, style: {marginBottom: 6}}, "← 一覧に戻る"),
+        E("h1", {style: {fontSize: 22, fontWeight: 700}}, "⚡ 一般カルテ 一括作成"),
+        E("p", {style: {fontSize: 13, color: "#6b7280", margin: "4px 0 0"}}, "予防接種・駆虫・採血など、同じ内容のカルテを牧場の複数頭にまとめて作ります。1頭ずつ病名カルテができ、後から個別に追記できます。")),
+      E("div", {style: {textAlign: "right"}},
+        E("div", {style: {fontSize: 12, color: "#6b7280"}}, selIds.length + "頭 × ¥" + perHorse.toLocaleString() + (kmFee ? "＋車両" : "")),
+        E("div", {style: {fontSize: 22, fontWeight: 800, color: "#166534"}}, "¥" + total.toLocaleString()),
+        E("button", {className: "btn btn-primary", onClick: create, disabled: selIds.length === 0, style: {padding: "8px 24px", fontSize: 15, marginTop: 4}}, selIds.length + "頭分を作成"))),
+    E("div", {style: {display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start"}},
+      // 左: 牧場と馬
+      E("div", null,
+        card("① 牧場と馬", E("div", null,
+          E(FarmSearchSelect, {farms, cases, value: farmId, onChange: v => { setFarmId(String(v)); setSelIds([]); }, placeholder: "牧場を検索..."}),
+          farmId && E("div", {style: {display: "flex", gap: 6, alignItems: "center", margin: "10px 0 6px", flexWrap: "wrap"}},
+            E("input", {className: "inp inp-sm", placeholder: "馬名で絞り込み", value: search, onChange: e => setSearch(e.target.value), style: {width: 160}}),
+            ["", "牝", "牡", "セン"].map(sx => E("button", {key: sx || "all", className: "tab-btn " + (sexFilter === sx ? "active" : ""), style: {padding: "2px 8px", fontSize: 11}, onClick: () => setSexFilter(sx)}, sx || "全性別")),
+            E("span", {style: {flex: 1}}),
+            E("button", {className: "btn btn-sm btn-secondary", onClick: () => setSelIds(farmHorses.map(h => h.id))}, "表示中を全選択"),
+            E("button", {className: "btn btn-sm btn-secondary", onClick: () => setSelIds([])}, "解除")),
+          farmId && E("div", {style: {maxHeight: 420, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8}},
+            farmHorses.length === 0 ? E("div", {style: {padding: 16, color: "#9ca3af", fontSize: 13}}, "この牧場に馬がいません") :
+            farmHorses.map(h => { const on = selIds.includes(h.id); const lv = lastVisitOf[h.id]; const already = lv === visitDate;
+              return E("label", {key: h.id, style: {display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: "1px solid #f3f4f6", background: on ? "#eff6ff" : "", cursor: "pointer", fontSize: 13}},
+                E("input", {type: "checkbox", checked: on, onChange: () => toggle(h.id), style: {width: 16, height: 16}}),
+                E("span", {style: {fontWeight: 600, flex: 1}}, h.name),
+                E("span", {style: {fontSize: 11, color: "#6b7280"}}, (h.sex || "") + (h.birthYear ? " " + h.birthYear : "")),
+                lv && E("span", {style: {fontSize: 10, color: already ? "#dc2626" : "#9ca3af", fontWeight: already ? 700 : 400}}, already ? "⚠ 同日カルテあり" : "前回 " + lv.slice(5).replace("-", "/")));
+            })),
+          E("div", {style: {fontSize: 11, color: "#6b7280", marginTop: 6}}, selIds.length + "頭 選択中"))),
+        card("② 日付・病名", E("div", null,
+          E("div", {style: {display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end"}},
+            E("div", null, E("label", {className: "lbl"}, "日付"), E("input", {className: "inp-sm", type: "date", value: visitDate, onChange: e => setVisitDate(e.target.value)})),
+            E("div", null, E("label", {className: "lbl"}, "初診/再診"), E("div", {style: {display: "flex", gap: 4}}, [{k: "初診", fee: 1500}, {k: "再診", fee: 750}, {k: "", fee: 0}].map(o => E("button", {key: o.k || "none", onClick: () => setVisitType(o.k), className: "tab-btn " + (visitType === o.k ? "active" : ""), style: {padding: "4px 10px", fontSize: 12}}, (o.k || "なし") + (o.fee ? " ¥" + o.fee.toLocaleString() : ""))))),
+            E("div", null, E("label", {className: "lbl"}, "カルテ状態"), E("div", {style: {display: "flex", gap: 4}}, ["診療終了", "継続中"].map(st => E("button", {key: st, onClick: () => setCaseStatus(st), className: "tab-btn " + (caseStatus === st ? "active" : ""), style: {padding: "4px 10px", fontSize: 12}}, st))))),
+          E("div", {style: {marginTop: 10}}, E("label", {className: "lbl"}, "病名 *"), E(DiagnosisInput, {value: diagnosis, onChange: setDiagnosis, cases})),
+          E("div", {style: {marginTop: 10}}, E("label", {className: "lbl"}, "備考（全頭共通）"), E("input", {className: "inp-sm", value: memo, onChange: e => setMemo(e.target.value), placeholder: "例: 春ワクチン1回目", style: {width: "100%"}}))))),
+      // 右: 処置・投薬・車両
+      E("div", null,
+        card("③ 処置（全頭共通）", E("div", null,
+          E("div", {style: {display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4}},
+            (showAllTreat ? treatSorted : treatSorted.slice(0, 12)).map(t => { const on = selTreat.some(x => x.id === t.id);
+              return E("label", {key: t.id, style: {display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", border: "1px solid " + (on ? "#2563eb" : "#e5e7eb"), borderRadius: 6, background: on ? "#eff6ff" : "#fff", cursor: "pointer", fontSize: 12}},
+                E("input", {type: "checkbox", checked: on, onChange: () => setSelTreat(p => on ? p.filter(x => x.id !== t.id) : [...p, t])}),
+                E("span", {style: {flex: 1}}, t.name), E("span", {style: {color: "#6b7280"}}, "¥" + (t.amount || 0).toLocaleString()));
+            })),
+          E("button", {className: "btn btn-sm btn-secondary", style: {marginTop: 6}, onClick: () => setShowAllTreat(!showAllTreat)}, showAllTreat ? "▲ よく使う処置だけ" : "▼ その他の処置を表示（" + Math.max(0, treatSorted.length - 12) + "件）"),
+          E("div", {style: {textAlign: "right", fontSize: 12, fontWeight: 700, marginTop: 4}}, "小計 ¥" + treatTotal.toLocaleString()))),
+        card("④ 投薬（全頭共通・1頭あたりの量）", E("div", null,
+          drugRows.map((row, i) => { const d = drugsMaster.find(x => x.id === Number(row.drugId)); const unitL = row.useRx && d ? (d.packUnit || d.unit) : (d ? d.unit : "");
+            return E("div", {key: i, style: {display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap"}},
+              E("div", {style: {flex: 1, minWidth: 220}}, E(DrugSearchBox, {drugsMaster, cases, value: row.drugId, onSelect: did => { updRow(i, "drugId", did); const nd = drugsMaster.find(x => x.id === Number(did)); if (nd && !row.dose) updRow(i, "dose", nd.defaultDose != null ? String(nd.defaultDose) : "1"); }})),
+              E("input", {type: "number", value: row.dose, onChange: e => updRow(i, "dose", e.target.value), style: {width: 64, padding: "4px 6px", border: "1px solid #d1d5db", borderRadius: 4, textAlign: "center"}}),
+              E("span", {style: {fontSize: 11, color: "#6b7280", minWidth: 24}}, unitL),
+              d && d.packPrice ? E("label", {style: {fontSize: 11, display: "flex", alignItems: "center", gap: 3}}, E("input", {type: "checkbox", checked: !!row.useRx, onChange: () => updRow(i, "useRx", !row.useRx)}), "単品") : null,
+              E("span", {style: {fontSize: 12, fontWeight: 700, color: "#166534", minWidth: 60, textAlign: "right"}}, d ? "¥" + calcDrugLine(d, row.dose, row.useRx).toLocaleString() : ""),
+              drugRows.length > 1 && E("button", {onClick: () => setDrugRows(p => p.filter((_, j) => j !== i)), style: {color: "#ef4444", background: "none", border: "none", cursor: "pointer"}}, "×"));
+          }),
+          E("button", {className: "btn btn-sm btn-secondary", onClick: () => setDrugRows(p => [...p, {drugId: "", dose: "", memo: "", useRx: false}])}, "＋ 薬品を追加"),
+          E("div", {style: {textAlign: "right", fontSize: 12, fontWeight: 700, marginTop: 4}}, "小計 ¥" + drugTotal.toLocaleString()))),
+        card("⑤ 車両・まとめ", E("div", null,
+          E("div", {style: {display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap"}},
+            E("div", null, E("label", {className: "lbl"}, "車両(km)"), E("input", {className: "inp-sm", type: "number", value: vehicleKm, onChange: e => setVehicleKm(e.target.value), style: {width: 90}})),
+            E("div", null, E("label", {className: "lbl"}, "車両料金の計上"), E("div", {style: {display: "flex", gap: 4}}, [["first", "1頭目だけ"], ["each", "全頭に"]].map(o => E("button", {key: o[0], onClick: () => setKmMode(o[0]), className: "tab-btn " + (kmMode === o[0] ? "active" : ""), style: {padding: "4px 10px", fontSize: 12}}, o[1])))),
+            E("div", {style: {fontSize: 12, color: "#6b7280"}}, kmFee ? "¥" + kmFee.toLocaleString() + (kmMode === "each" ? " × " + selIds.length + "頭" : "") : "")),
+          E("div", {style: {marginTop: 12, padding: 12, background: "#f0fdf4", borderRadius: 8, fontSize: 13, lineHeight: 1.8}},
+            E("div", null, "1頭あたり: " + (visitType || "初診再診なし") + " ¥" + visitFee.toLocaleString() + " ＋ 処置 ¥" + treatTotal.toLocaleString() + " ＋ 薬 ¥" + drugTotal.toLocaleString() + " ＝ ", E("b", null, "¥" + perHorse.toLocaleString())),
+            E("div", null, selIds.length + "頭 合計 ", E("b", {style: {fontSize: 16, color: "#166534"}}, "¥" + total.toLocaleString()))),
+          E("button", {className: "btn btn-primary", onClick: create, disabled: selIds.length === 0, style: {width: "100%", padding: 10, fontSize: 15, marginTop: 10}}, selIds.length + "頭分のカルテを作成")))))
+  );
+}
+
 // ═══════════════ GENERIC SEARCH BOX ═══════════════
 function SearchBox({
   items,
@@ -8966,6 +9114,36 @@ function DashboardPage({
     });
     return r;
   })();
+  // 確認が必要なカルテ（請求に影響しうる未入力・中途半端なもの）
+  const checkItems = (() => {
+    const out = [];
+    const horseById = {}; horses.forEach(h => { horseById[h.id] = h; });
+    const curYm = todayStr.slice(0, 7);
+    cases.forEach(c => {
+      if (c.archived || c.source === "FM") return;   // FM取込分は金額確定済みなので対象外
+      const h = horseById[c.horseId];
+      const lastD = c.type === "一般" ? ((c.visits || []).reduce((mx, v) => (v.date || "") > mx ? v.date : mx, c.openDate || "")) : (c.openDate || "");
+      if (lastD && lastD.slice(0, 7) < curYm.slice(0, 4) + "-01") return;   // 今年分だけ
+      if (c.type === "一般") {
+        const vs = c.visits || [];
+        if (vs.length === 0) { out.push({c, h, kind: "診療なし", detail: "カルテだけ作成（請求 ¥0・請求書には載りません）", color: "#6b7280"}); return; }
+        const empty = vs.filter(v => (v.treatments || []).length === 0 && (v.drugs || []).filter(d => d.drugId).length === 0 && !v.vehicleKm && !v.totalFee);
+        if (empty.length > 0) {
+          const fee = empty.reduce((a, v) => a + calcVisitTotal(v, drugsMaster), 0);
+          out.push({c, h, kind: "処置なし", detail: empty.length + "回の診療に処置・薬がありません" + (fee ? "（初診/再診料 ¥" + fee.toLocaleString() + " だけ請求されます）" : "（¥0）"), color: fee ? "#b45309" : "#6b7280"});
+        }
+        if (!c.diagnosis) out.push({c, h, kind: "病名なし", detail: "病名が空です", color: "#b45309"});
+      } else if (c.type === "繁殖") {
+        if ((c.findings || []).filter(f => f.date).length === 0 && !c.carryoverFrom) out.push({c, h, kind: "所見なし", detail: "繁殖カルテに所見がありません（¥0）", color: "#6b7280"});
+      } else if (c.type === "薬事") {
+        if ((c.pharmaItems || []).length === 0) out.push({c, h, kind: "薬品なし", detail: "薬事カルテに薬品がありません（¥0）", color: "#6b7280"});
+      }
+      if (!h) out.push({c, h, kind: "馬不明", detail: "馬マスターに見つかりません（請求先が決まりません）", color: "#dc2626"});
+      else if (!c.farmId && !h.farmId) out.push({c, h, kind: "牧場なし", detail: "馬の所属牧場が未設定（請求書に載りません）", color: "#dc2626"});
+    });
+    return out;
+  })();
+  const [showCheck, setShowCheck] = useState(false);
   const [bsFilter, setBsFilter] = useState("");      // 繁殖スケジュールの状態フィルタ
   const [bsSort, setBsSort] = useState("date");       // date | farm | horse
   const [bsShowAll, setBsShowAll] = useState(false);  // 期日前（14日より先）も表示
@@ -9002,6 +9180,10 @@ function DashboardPage({
     className: "btn btn-primary",
     onClick: () => onNav("general_new")
   }, "\uFF0B \u4E00\u822C\u30AB\u30EB\u30C6"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-secondary",
+    title: "予防接種・駆虫など同内容のカルテを複数頭にまとめて作成",
+    onClick: () => onNav("general_batch")
+  }, "\u26A1 \u307E\u3068\u3081\u3066"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-secondary",
     onClick: () => onNav("breeding_input")
   }, "\uFF0B \u7E41\u6B96\u30AB\u30EB\u30C6"))), /*#__PURE__*/React.createElement("div", {
@@ -9074,7 +9256,21 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), /*#__PURE__*/React.createElement("div", {
+  }, s.sub)))))), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
+    /*#__PURE__*/React.createElement("div", {style: {padding: "10px 14px", background: "#fffbeb", color: "#92400e", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer"}, onClick: () => setShowCheck(!showCheck)},
+      /*#__PURE__*/React.createElement("span", null, (showCheck ? "▾" : "▸") + " ⚠ 確認が必要なカルテ"),
+      /*#__PURE__*/React.createElement("span", {className: "badge badge-orange"}, checkItems.length + "件"),
+      /*#__PURE__*/React.createElement("span", {style: {fontSize: 11, fontWeight: 400, color: "#92400e"}}, "作っただけ・処置なし・病名なし・牧場未設定（今年のアプリ入力分）。処置も薬もない診療は初診/再診料だけが請求され、診療が1回もないカルテは請求されません。")),
+    showCheck && /*#__PURE__*/React.createElement("div", {style: {maxHeight: 320, overflowY: "auto"}}, checkItems.map((x, i) => {
+      const f = (x.c.farmId && farms.find(ff => ff.id === Number(x.c.farmId))) || (x.h ? farms.find(ff => ff.id === x.h.farmId) : null);
+      return /*#__PURE__*/React.createElement("div", {key: i, style: {padding: "6px 12px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12}, onClick: () => onOpenCase(x.c)},
+        /*#__PURE__*/React.createElement("span", {className: "badge badge-" + (x.c.type === "一般" ? "blue" : x.c.type === "繁殖" ? "pink" : "orange")}, x.c.type),
+        /*#__PURE__*/React.createElement("span", {style: {fontWeight: 700, minWidth: 64, color: x.color}}, x.kind),
+        /*#__PURE__*/React.createElement("span", {style: {fontWeight: 600, minWidth: 140}}, x.h ? x.h.name : "(馬ID " + x.c.horseId + ")"),
+        /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280", minWidth: 100}}, f ? f.name : ""),
+        /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280"}}, (x.c.openDate || "") + " " + (x.c.diagnosis || "")),
+        /*#__PURE__*/React.createElement("span", {style: {flex: 1, color: x.color}}, x.detail));
+    }))), /*#__PURE__*/React.createElement("div", {
     style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }
   }, /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -11691,6 +11887,12 @@ function App() {
           onOpenCase: openCase,
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x))
         });
+      case "general_batch":
+        return /*#__PURE__*/React.createElement(BatchKartePage, {
+          horses: horses, farms: farms, drugsMaster: drugsMaster, treatmentsMaster: treatmentsMaster, cases: cases, currentVet: currentVet,
+          onBack: () => setPage("general"),
+          onSaveMany: (list) => { const now = new Date().toISOString(); setCases(p => p.concat(list.map(c => Object.assign({}, c, {updatedAt: now})))); }
+        });
       case "general_new":
         return /*#__PURE__*/React.createElement(GeneralKartePage, {key:"gn"+newGeneralKey,
           horses: horses,
@@ -12117,10 +12319,14 @@ function App() {
         fontSize: 22,
         fontWeight: 700
       }
-    }, "\u4E00\u822C\u8A3A\u7642"), /*#__PURE__*/React.createElement("button", {
+    }, "\u4E00\u822C\u8A3A\u7642"), /*#__PURE__*/React.createElement("div", {style: {display: "flex", gap: 8}}, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-secondary",
+      title: "予防接種・駆虫など同じ内容のカルテを複数頭にまとめて作成",
+      onClick: () => setPage("general_batch")
+    }, "\u26A1 \u307E\u3068\u3081\u3066\u4F5C\u6210"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-primary",
       onClick: () => { setLastAddedHorseId(null); setEditingCase(null); setNewGeneralKey(function(k){return k+1}); setPage("general_new"); }
-    }, "\uFF0B \u65B0\u898F\u30AB\u30EB\u30C6")), /*#__PURE__*/React.createElement("p", {
+    }, "\uFF0B \u65B0\u898F\u30AB\u30EB\u30C6"))), /*#__PURE__*/React.createElement("p", {
       style: {
         fontSize: 12,
         color: "#6b7280",
