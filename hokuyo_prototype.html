@@ -8406,7 +8406,9 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
             // 同じ業者・商品の既存紐づけを引き継ぐ
             recs.forEach(function(r){
               if (r.drugId) return;
-              var prev = next.find(function(x){ return x.supplier === r.supplier && x.drugId && ((r.code && x.code === r.code) || x.name === r.name); });
+              // 紐づけの引き継ぎ: 同じ業者で商品コードが一致（両方にコードあり）、またはコード無し同士で商品名＋規格が一致するときだけ
+              var nk = function(v){ return String(v||"").replace(/[\u3000\s]/g,""); };
+              var prev = next.find(function(x){ if (x.supplier !== r.supplier || !x.drugId) return false; if (r.code && x.code) return x.code === r.code; if (r.code || x.code) return false; return nk(x.name) === nk(r.name) && nk(x.spec) === nk(r.spec); });
               if (prev) { r.drugId = prev.drugId; r.packQty = prev.packQty; }
             });
             next = next.concat(recs); added++;
