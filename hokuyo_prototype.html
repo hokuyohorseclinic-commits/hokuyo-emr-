@@ -1278,7 +1278,7 @@ return viFee+t+d+vf+Number(v.adjustFee||0);
 // ・一般カルテの計上月：FileMaker取込分（source==="FM"）はカルテの診療日（openDate）の月に全診療をまとめて計上（FMの請求書と同じ）
 //   アプリで作ったカルテは診療日ごとにその月へ計上
 function caseBelongsToFarm(c, farmId, farmHorseIds){ if (c && c.farmId) return Number(c.farmId) === Number(farmId); return !!(c && c.horseId && farmHorseIds && farmHorseIds.has(c.horseId)); }
-function visitInPeriod(c, v, start, end){ if (!v || !v.date) return false; if (c && c.source === "FM" && c.type === "一般") { var d = c.openDate || ""; return d >= start && d <= end; } return v.date >= start && v.date <= end; }
+function visitInPeriod(c, v, start, end){ if (!v || !v.date) return false; if (c && c.draft) return false; /* AI下書きは確定するまで請求に載せない */ if (c && c.source === "FM" && c.type === "一般") { var d = c.openDate || ""; return d >= start && d <= end; } return v.date >= start && v.date <= end; }
 function calcCaseTotal(c,dm){
 if(c.type==="一般")return(c.visits||[]).reduce(function(s,v){return s+calcVisitTotal(v,dm);},0);
 if(c.type==="薬事")return(c.pharmaItems||[]).reduce(function(s,x){return s+x.price;},0);
@@ -3481,7 +3481,7 @@ function GeneralKartePage({
       fontSize: 22,
       fontWeight: 700
     }
-  }, isNew ? "\u65B0\u898F\u30AB\u30EB\u30C6\u4F5C\u6210" : "\u75C5\u540D\u30AB\u30EB\u30C6"), /*#__PURE__*/React.createElement("p", {
+  }, isNew ? "\u65B0\u898F\u30AB\u30EB\u30C6\u4F5C\u6210" : "\u75C5\u540D\u30AB\u30EB\u30C6", !isNew && kase && kase.draft && /*#__PURE__*/React.createElement("span", {className: "badge", style: {marginLeft: 10, background: "#ede9fe", color: "#5b21b6", fontSize: 12, verticalAlign: "middle"}, title: "診療メモからClaudeが作った下書き。ダッシュボードの「確認が必要なカルテ」で確定すると請求に載ります"}, "AI下書き（未確定）")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: "#6b7280",
@@ -9155,7 +9155,8 @@ function DashboardPage({
   onOpenCase,
   onCloseCase,
   memos,
-  onUpdateMemos
+  onUpdateMemos,
+  onConfirmDraft
 }) {
   const contCasesAll = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D" && !c.archived);
   const todayStr = todayJST();
@@ -9182,6 +9183,7 @@ function DashboardPage({
     cases.forEach(c => {
       if (c.archived || c.source === "FM") return;   // FM取込分は金額確定済みなので対象外
       const h = horseById[c.horseId];
+      if (c.draft) { out.push({c, h, kind: "AI下書き", detail: "診療メモから作成。内容を確認して「確定」を押してください（確定するまで請求に載りません）", color: "#7c3aed", draft: true}); }
       const lastD = c.type === "一般" ? ((c.visits || []).reduce((mx, v) => (v.date || "") > mx ? v.date : mx, c.openDate || "")) : (c.openDate || "");
       if (lastD && lastD.slice(0, 7) < curYm.slice(0, 4) + "-01") return;   // 今年分だけ
       if (c.type === "一般") {
@@ -9329,7 +9331,8 @@ function DashboardPage({
         /*#__PURE__*/React.createElement("span", {style: {fontWeight: 600, minWidth: 140}}, x.h ? x.h.name : "(馬ID " + x.c.horseId + ")"),
         /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280", minWidth: 100}}, f ? f.name : ""),
         /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280"}}, (x.c.openDate || "") + " " + (x.c.diagnosis || "")),
-        /*#__PURE__*/React.createElement("span", {style: {flex: 1, color: x.color}}, x.detail));
+        /*#__PURE__*/React.createElement("span", {style: {flex: 1, color: x.color}}, x.detail),
+        x.draft && onConfirmDraft && /*#__PURE__*/React.createElement("button", {className: "btn btn-sm", style: {background: "#7c3aed", color: "#fff", border: "none", whiteSpace: "nowrap"}, onClick: e => { e.stopPropagation(); if (confirm((x.h ? x.h.name : "") + "「" + (x.c.diagnosis || "") + "」の下書きを確定しますか？")) onConfirmDraft(x.c); }}, "✓ 確定"));
     }))), /*#__PURE__*/React.createElement("div", {
     style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }
   }, /*#__PURE__*/React.createElement("div", {
@@ -11954,7 +11957,8 @@ function App() {
           onOpenCase: openCase,
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
-          onUpdateMemos: setMemos
+          onUpdateMemos: setMemos,
+          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
       case "general_batch":
         return /*#__PURE__*/React.createElement(BatchKartePage, {
@@ -12299,7 +12303,8 @@ function App() {
           onOpenCase: openCase,
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
-          onUpdateMemos: setMemos
+          onUpdateMemos: setMemos,
+          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
     }
   };
