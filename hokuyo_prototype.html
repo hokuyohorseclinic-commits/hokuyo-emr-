@@ -2912,7 +2912,7 @@ function HorseSearchSelect({horses, farms, cases, value, onChange, disabled, onA
   const ref = React.useRef(null);
 
   React.useEffect(() => {
-    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const handler = e => { if (ref.current && e.target && e.target.isConnected && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", handler);
     document.addEventListener("touchstart", handler, {passive: true});
     return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler); };
@@ -3101,7 +3101,7 @@ function DiagnosisInput({value, onChange, cases}) {
   const [query, setQuery] = useState("");
   const ref = React.useRef(null);
   React.useEffect(() => {
-    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const handler = e => { if (ref.current && e.target && e.target.isConnected && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
