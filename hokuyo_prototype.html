@@ -617,11 +617,15 @@ function _markInitialReceived(docName) {
 }
 
 // 未受信中にローカルで追加されたレコード(id付き)をリモートへマージ（リモート側の削除・更新はそのまま）
+// ※ この端末で「今回起動してから」作ったレコード（id = Date.now()）だけを対象にする。
+//    古いローカルデータ（他端末で削除・置換済みのカルテ等）を復活させないため。
+var _appStartTime = Date.now();
 function _mergeLocalExtras(remote, local) {
   if (!Array.isArray(remote) || !Array.isArray(local)) return null;
   var ids = {};
   remote.forEach(function(x) { if (x && x.id !== undefined) ids[x.id] = 1; });
-  var extra = local.filter(function(x) { return x && x.id !== undefined && !ids[x.id]; });
+  var since = _appStartTime - 5 * 60 * 1000;
+  var extra = local.filter(function(x) { return x && x.id !== undefined && !ids[x.id] && Number(x.id) >= since; });
   return extra.length ? remote.concat(extra) : null;
 }
 
