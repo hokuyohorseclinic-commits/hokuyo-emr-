@@ -1153,6 +1153,12 @@ var CLINIC_LOGO_B64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgUAAAIICAY
 var INIT_FARMS=[];
 var INIT_HORSES=[];
 var SYMPTOMS=["跛行","発熱","咳","疼痛","腫脹","熱感","呼吸促拍","腫瘍","骨折","下痢","食欲不振","疝痛"];
+// 2026-11-07 院長要望: 症状欄を「部位」「傷の種類」「症状」の3段に拡張（保存形式は従来どおり symptoms 配列）
+var SYMPTOM_GROUPS=[
+  {label:"部位", items:["左前肢","右前肢","左後肢","右後肢","蹄","繋","球節","管部","腕節","飛節","膝","肘","肩","上腕","大腿","臀部","頭部","眼","口腔","頸部","胸部","腹部","背腰","尾","陰部","包皮","乳房","全身"]},
+  {label:"傷の種類", items:["切創","刺創","裂創","擦過創","挫創","咬傷","打撲","膿瘍","化膿","蜂窩織炎","皮膚炎","裂蹄","蹄膿瘍","蹄叉腐爛","腱炎","関節炎","骨折"]},
+  {label:"症状", items:["跛行","疼痛","腫脹","熱感","浮腫","出血","発熱","咳","鼻汁","呼吸促拍","呼吸音異常","流涙","眼脂","眼瞼腫脹","食欲不振","元気消失","疝痛","下痢","軟便","便秘","発汗","脱水","削痩","起立不能","神経症状","腫瘍","排尿異常","外陰部排出物"]}
+];
 var COMMON_DIAGNOSES=["関節周囲炎","感冒","疝痛","骨折","蹄葉炎","腱炎","裂蹄","蹄叉腐爛","ロタ予防接種","輸送熱予防","フォールチェック","子宮炎","難産","肌荒","尿道閉塞","血液検査","レントゲン検査","精液検査","腸閉塞","肺炎","馬インフルエンザ","破傷風","疲労骨折","挫跖","球節炎","飛節炎","背腰痛","筋肉痛","創傷","皮膚炎","結膜炎","角膜潰瘍","胃潰瘍"];
 var INIT_TREATMENTS=[
 {id:1,name:"筋肉注射",priority:"高",points:30,amount:900,order:1},
@@ -1375,10 +1381,16 @@ function breedingNextEvent(c, todayS){
   if(fut){var fd=daysBetween(todayS,fut.date);return {status:e.status,date:fut.date,type:"予定",detail:(fut.schedule||fut.memo||"")+" ("+fd+"日後)",diff:fd,rule:"手入力の予定行"};}
   var st=e.status, target=null, type="", detail="", rule="";
   var prev=c.prevSeason||null;
+  // 2026-11-07 院長指示（スケジュールを減らす）: 自動で載せるのは「種付中の妊鑑日」だけ。
+  //   不受胎の次発情・受胎の節目（28/35/49/63）は自動では載せず、予定欄に書いてあるときだけ。
+  //   分娩予定は予定日の前後14日だけ。超過後の残留は一律7日（妊鑑のみ14日）。受胎の節目は繁殖一覧の胎齢色分けで見る。
   if(st==="継続中"&&!e.insDate&&!c.foalingDate&&prev&&prev.result==="受胎"&&prev.insDate){
-    // 前年受胎・未出産 → 分娩予定（種付+340日）
-    target=addDaysStr(prev.insDate,340); type="分娩予定"; rule="前年種付"+prev.insDate.slice(5).replace("-","/")+"+340日";
-    var dd=daysBetween(prev.insDate,todayS); detail="妊娠"+dd+"日（"+rule+"）";
+    // 前年受胎・未出産 → 分娩予定（種付+340日）※前後14日だけ表示
+    var ft=addDaysStr(prev.insDate,340);
+    if(Math.abs(daysBetween(todayS,ft))<=14){
+      target=ft; type="分娩予定"; rule="前年種付"+prev.insDate.slice(5).replace("-","/")+"+340日";
+      var dd=daysBetween(prev.insDate,todayS); detail="妊娠"+dd+"日（"+rule+"）";
+    }
   } else if(st==="継続中"&&c.foalingDate&&(!last||last.date<c.foalingDate)){
     // 出産後、所見なし → 産後チェック（出産+7日）
     target=addDaysStr(c.foalingDate,7); type="産後"; rule="出産+7日";
@@ -1389,26 +1401,25 @@ function breedingNextEvent(c, todayS){
     var d1=daysBetween(e.insDate,todayS);
     detail="種付"+d1+"日目"+(todayS>target?" ⚠未鑑定":"")+"（"+rule+"）";
   } else if(st==="不受胎"&&e.judgeDate){
-    var base=last&&last.date>=e.judgeDate?last.date:e.judgeDate;
-    var n2=(sched&&sched.kind==="rel")?sched.days:4;
-    target=addD(base,n2); type="次発情"; rule=(sched&&sched.kind==="rel"?"PG/予定欄 +":"判定日+")+n2+"日";
-    var d2=daysBetween(e.judgeDate,todayS);
-    detail="不受胎判定から"+d2+"日"+(todayS>target?" ⚠再種付なし":"")+"（"+rule+"）";
+    // 予定欄（pg3 / 4day 等）があるときだけ
+    if(sched&&sched.kind==="rel"&&last){
+      var base=last.date>=e.judgeDate?last.date:e.judgeDate;
+      target=addD(base,sched.days); type="次発情"; rule="予定欄 +"+sched.days+"日";
+      var d2=daysBetween(e.judgeDate,todayS);
+      detail="不受胎判定から"+d2+"日（"+rule+"）";
+    }
   } else if(st==="受胎"&&e.insDate){
+    // 予定欄（28 / 35 / 4w / 8day 等）があるときだけ。節目の自動表示はしない（一覧の胎齢色分けで見る）
     var ges=daysBetween(e.insDate,todayS);
     if(sched&&sched.kind==="ges"){target=addD(e.insDate,sched.days);rule="胎齢"+sched.days+"日";}
-    else if(sched&&sched.kind==="rel"){target=addD(last.date,sched.days);rule="最終診察+"+sched.days+"日";}
-    else {
-      var ms=[28,35,49,63], lastGes=last?daysBetween(e.insDate,last.date):0;
-      for(var i=0;i<ms.length;i++){ if(ms[i]>lastGes){target=addD(e.insDate,ms[i]);rule="胎齢"+ms[i]+"日（節目）";break;} }
-    }
+    else if(sched&&sched.kind==="rel"&&last){target=addD(last.date,sched.days);rule="最終診察+"+sched.days+"日";}
     if(target){type="再鑑定";detail="胎齢"+ges+"日（"+rule+"）";}
   } else if(st==="継続中"){
     if(sched&&(sched.kind==="rel"||sched.kind==="ins")&&last){target=addD(last.date,sched.days);type="次回";rule="最終診察+"+sched.days+"日";detail=(last.schedule||"")+"（"+rule+"）";}
   }
   if(!target) return {status:st,date:null};
   var diff=daysBetween(todayS,target);
-  var keep = type==="妊鑑" ? 60 : type==="次発情" ? 30 : type==="分娩予定" ? 45 : 21;   // 超過後も載せておく日数
+  var keep = type==="妊鑑" ? 14 : 7;   // 超過後も載せておく日数（2026-11-07 短縮）
   if(diff < -keep) return {status:st,date:null,dropped:true};
   return {status:st,date:target,type:type,detail:detail+" "+lbl(diff),diff:diff,rule:rule};
 }
@@ -3754,17 +3765,28 @@ function GeneralKartePage({
       fontWeight: 700,
       marginBottom: 12
     }
-  }, "\u2461 \u75C7\u72B6"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 6
-    }
-  }, SYMPTOMS.map(s => /*#__PURE__*/React.createElement("button", {
+  }, "\u2461 \u75C7\u72B6"), SYMPTOM_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.label,
+    style: { display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { width: 64, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", paddingTop: 6 }
+  }, g.label), /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", gap: 6 }
+  }, g.items.map(s => /*#__PURE__*/React.createElement("button", {
     key: s,
     onClick: () => toggleSymptom(s),
     className: `symptom-btn ${symptoms.includes(s) ? "active" : ""}`
-  }, s)))), /*#__PURE__*/React.createElement("div", {
+  }, s))))), symptoms.filter(s => !SYMPTOM_GROUPS.some(g => g.items.includes(s))).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { width: 64, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", paddingTop: 6 }
+  }, "その他"), /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", flexWrap: "wrap", gap: 6 }
+  }, symptoms.filter(s => !SYMPTOM_GROUPS.some(g => g.items.includes(s))).map(s => /*#__PURE__*/React.createElement("button", {
+    key: s,
+    onClick: () => toggleSymptom(s),
+    className: "symptom-btn active"
+  }, s))))), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 20,
@@ -5086,7 +5108,23 @@ function BreedingListPage({
     className: `badge badge-${statusColors[situation] || "gray"}`
   }, situation) : /*#__PURE__*/React.createElement("span", {
     className: `badge badge-${statusColors[c.breedingStatus] || "gray"}`
-  }, c.breedingStatus || "—")), /*#__PURE__*/React.createElement("td", {style:{fontSize:11,whiteSpace:"nowrap"}}, prevInfo ? /*#__PURE__*/React.createElement("div", {title: prevInfo.season + "年: " + prevInfo.result + (prevInfo.insDate ? " 種付" + prevInfo.insDate : "") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : "")},
+  }, c.breedingStatus || "—"), (() => {
+    // 2026-11-07: 受胎馬は胎齢を節目（28/35/49/63日）で色分け表示（ダッシュボードの自動節目予定の代わり）
+    const eff = breedingEffective(c, today);
+    if (eff.status !== "受胎" || !eff.insDate) return null;
+    const ges = daysBetween(eff.insDate, today);
+    const ms = [28, 35, 49, 63];
+    const next = ms.find(m => m > ges);
+    const lastChecked = (eff.findings || []).filter(fi => fi.date && fi.date >= eff.insDate).slice(-1)[0];
+    const lastGes = lastChecked ? daysBetween(eff.insDate, lastChecked.date) : 0;
+    const due = ms.find(m => m > lastGes && m <= ges);   // 節目を過ぎたのに未診察
+    const col = due ? ["#fee2e2", "#991b1b"] : next && next - ges <= 7 ? ["#fef3c7", "#92400e"] : ges >= 63 ? ["#dcfce7", "#166534"] : ["#eef2ff", "#3730a3"];
+    const label = "胎齢" + ges + "日" + (due ? " ⚠" + due + "日未" : next ? " →" + next : "");
+    return /*#__PURE__*/React.createElement("span", {
+      title: "28・35・49・63日の節目。赤=節目を過ぎて未診察、黄=節目まで7日以内、緑=63日超、青=それ以外",
+      style: { display: "inline-block", marginLeft: 4, padding: "1px 6px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: col[0], color: col[1], whiteSpace: "nowrap" }
+    }, label);
+  })()), /*#__PURE__*/React.createElement("td", {style:{fontSize:11,whiteSpace:"nowrap"}}, prevInfo ? /*#__PURE__*/React.createElement("div", {title: prevInfo.season + "年: " + prevInfo.result + (prevInfo.insDate ? " 種付" + prevInfo.insDate : "") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : "")},
     /*#__PURE__*/React.createElement("span", {className:"badge " + ({"受胎":"badge-purple","不受胎":"badge-red","未判定":"badge-pink","配合しない":"badge-gray"}[prevInfo.result] || "badge-gray"), style:{fontSize:10}}, String(prevInfo.season).slice(2) + " " + prevInfo.result),
     prevInfo.insDate && /*#__PURE__*/React.createElement("div", {style:{color:"#6b7280",fontSize:10}}, "種付 " + prevInfo.insDate.slice(5).replace("-","/") + (prevInfo.stallion ? " ♂" + prevInfo.stallion : ""))
   ) : /*#__PURE__*/React.createElement("span", {className:"badge badge-green", style:{fontSize:10}}, "新規")), /*#__PURE__*/React.createElement("td", null, (() => {
@@ -6157,7 +6195,8 @@ function BillingPage({
   const calcBreedingPeriodTotal = (c, start, end) => {
     if (c.type !== "繁殖" || !c.findings) return 0;
     const bm = typeof INIT_BREEDING_TREATMENTS !== "undefined" ? INIT_BREEDING_TREATMENTS : [];
-    return c.findings.filter(f => f.date && f.date >= start && f.date <= end)
+    if (c.draft) return 0;   // AI下書きのカルテは確定まで請求に載せない
+    return c.findings.filter(f => f.date && f.date >= start && f.date <= end && !f.draft)   // 下書きの経過行も除外
       .reduce((s, f) => s + calcBreedingVisitTotal(f, bm), 0);
   };
 
@@ -9198,6 +9237,10 @@ function DashboardPage({
       if (c.archived || c.source === "FM") return;   // FM取込分は金額確定済みなので対象外
       const h = horseById[c.horseId];
       if (c.draft) { out.push({c, h, kind: "AI下書き", detail: "診療メモから作成。内容を確認して「確定」を押してください（確定するまで請求に載りません）", color: "#7c3aed", draft: true}); }
+      else if (c.type === "繁殖" && (c.findings || []).some(f => f.draft)) {
+        const dfs = (c.findings || []).filter(f => f.draft);
+        out.push({c, h, kind: "AI下書き（経過）", detail: "診療メモから経過記録 " + dfs.length + " 行を追加（" + dfs.map(f => (f.date || "").slice(5).replace("-", "/") + " " + (f.procedures || []).join("・")).join("、") + "）。確認して「確定」を押してください（確定するまで請求に載りません）", color: "#7c3aed", draft: true});
+      }
       const lastD = c.type === "一般" ? ((c.visits || []).reduce((mx, v) => (v.date || "") > mx ? v.date : mx, c.openDate || "")) : (c.openDate || "");
       if (lastD && lastD.slice(0, 7) < curYm.slice(0, 4) + "-01") return;   // 今年分だけ
       if (c.type === "一般") {
@@ -9499,8 +9542,9 @@ function DashboardPage({
       (c.findings || []).forEach(f => { if (f.date > d) d = f.date; });
       return d;
     };
-    const key = c => (c.updatedAt || "").slice(0, 10) > lastDate(c) ? (c.updatedAt || "").slice(0, 10) : lastDate(c);
-    return cases.filter(c => !c.archived).map(c => ({ c, k: key(c), u: c.updatedAt || "" })).sort((a, b) => b.k.localeCompare(a.k) || b.u.localeCompare(a.u)).slice(0, 15).map(x => x.c);
+    // 2026-11-07 院長指示: 並びは「入力・更新した日時（updatedAt）」だけで決める（診療日とは混ぜない）。
+    // updatedAt の無いカルテ（FM取込のみ・アプリで一度も保存していない）は載せない
+    return cases.filter(c => !c.archived && c.updatedAt).map(c => ({ c, u: c.updatedAt })).sort((a, b) => b.u.localeCompare(a.u)).slice(0, 15).map(x => x.c);
   })().map(c => {
     const h = horses.find(x => x.id === c.horseId);
     const f = (c.farmId && farms.find(x => x.id === Number(c.farmId))) || (h ? farms.find(x => x.id === h.farmId) : null);
@@ -11994,7 +12038,7 @@ function App() {
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
           onUpdateMemos: setMemos,
-          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
+          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
       case "general_batch":
         return /*#__PURE__*/React.createElement(BatchKartePage, {
@@ -12340,7 +12384,7 @@ function App() {
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
           onUpdateMemos: setMemos,
-          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
+          onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
     }
   };
