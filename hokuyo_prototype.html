@@ -2831,7 +2831,7 @@ function Sidebar({
     }
   }, "\u{1F4C2} \u30C7\u30FC\u30BF\u8AAD\u8FBC"), /*#__PURE__*/React.createElement("button", {
     onClick: onImportFm,
-    title: "FileMaker\u304B\u3089\u5909\u63DB\u3057\u305FJSON\uFF08hokuyo-fm-import\uFF09\u3092\u30DE\u30FC\u30B8\u53D6\u8FBC",
+    title: "FileMakerから変換したJSON（hokuyo-fm-import）をマージ取込。取込は 2026-10-31 まで（11月以降はアプリ直接入力のため、FM側の11月以降分は読み飛ばし・既存カルテは保護）",
     style: {
       padding: "6px 8px",
       borderRadius: 4,
@@ -2843,7 +2843,7 @@ function Sidebar({
       cursor: "pointer",
       width: "100%"
     }
-  }, "\u{1F5C4}\uFE0F FM\u30AB\u30EB\u30C6\u53D6\u8FBC"), /*#__PURE__*/React.createElement("button", {
+  }, "\u{1F5C4}\uFE0F FM\u30AB\u30EB\u30C6\u53D6\u8FBC\uFF08\uFF5E10/31\uFF09"), /*#__PURE__*/React.createElement("button", {
     onClick: onResetData,
     style: {
       padding: "6px 8px",
@@ -11645,6 +11645,9 @@ function App() {
   // ・以前 FM 取込したカルテ（source==="FM"）は全て入れ替え（再取込しても重複しない）
   // ・置換で消える繁殖カルテに dateTo より後の経過記録があれば、新しい FM カルテ（同じ馬・同じシーズン）へ引き継ぐ
   // ・ID は 900000000 + FMカルテno（既存IDと衝突しない範囲）
+  // ・FM_IMPORT_LIMIT（2026-10-31）より後の日付は取込対象外：2026-11 以降はアプリ直接入力に切り替えたため、
+  //   JSON 側の 11月以降のカルテ・経過記録は読み飛ばし、既存の 11月以降のカルテは置換・削除しない
+  const FM_IMPORT_LIMIT = "2026-10-31";
   const importFmData = () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -11659,8 +11662,26 @@ function App() {
           if (data.format !== "hokuyo-fm-import" || !Array.isArray(data.cases)) {
             alert("FM取込用のファイルではありません（format: hokuyo-fm-import が必要）"); return;
           }
-          const from = data.dateFrom || "0000-00-00", to = data.dateTo || "9999-99-99";
+          const from = data.dateFrom || "0000-00-00";
+          const toRaw = data.dateTo || "9999-99-99";
+          const to = toRaw > FM_IMPORT_LIMIT ? FM_IMPORT_LIMIT : toRaw;   // 10月までで固定（11月以降はアプリ入力を保護）
+          if (from > to) { alert("この取込ファイルは " + from + " 以降のカルテです。\nFM取込は " + FM_IMPORT_LIMIT + " までに制限されています（11月以降はアプリ直接入力）。取込を中止しました。"); return; }
           const inRange = (d) => d && d >= from && d <= to;
+          // ── JSON 側：上限より後のカルテ・経過記録は読み飛ばす
+          const srcAll = data.cases;
+          let skippedAfterLimit = 0, skippedFindings = 0;
+          data.cases = srcAll.filter(c => {
+            if (c.type === "繁殖") return true;
+            if (inRange(c.openDate) || !c.openDate) return true;
+            if (c.openDate > to) { skippedAfterLimit++; return false; }
+            return true;
+          }).map(c => {
+            if (c.type !== "繁殖") return c;
+            const fs = (c.findings || []);
+            const keep = fs.filter(f => !f.date || f.date <= to);
+            skippedFindings += fs.length - keep.length;
+            return Object.assign({}, c, { findings: keep });
+          }).filter(c => c.type !== "繁殖" || (c.findings || []).length > 0 || inRange(c.openDate));
           // ── 置換対象：JSON の期間（dateFrom〜dateTo）に openDate が入る既存カルテ（FM由来・手入力とも）
           //    期間外のカルテはそのまま残す（月次の差分取込ができる）
           const removed = cases.filter(c => inRange(c.openDate) && c.type !== "繁殖");
@@ -11717,7 +11738,8 @@ function App() {
           const btFix = (data.breedingTreatments || []).filter(b => btNow.some(x => (x.id === b.id || x.name === b.name) && !(Number(x.fee) > 0)) && Number(b.fee) > 0);
           const cnt = (arr) => ["一般", "繁殖", "薬事"].map(t => t + " " + arr.filter(c => c.type === t).length).join(" / ");
           const msg = "FileMaker カルテを取り込みます。\n\n" +
-            "期間: " + from + " 〜 " + to + "\n" +
+            "期間: " + from + " 〜 " + to + (toRaw > to ? "（ファイルの " + toRaw + " までを " + FM_IMPORT_LIMIT + " で打ち切り）" : "") + "\n" +
+            ((skippedAfterLimit || skippedFindings) ? "※ " + FM_IMPORT_LIMIT + " より後のFMカルテ " + skippedAfterLimit + " 件・繁殖経過 " + skippedFindings + " 行は読み飛ばします（11月以降はアプリ入力分を保護）\n" : "") +
             "追加/更新: " + newCases.length + "件（" + cnt(newCases) + "）\n" +
             "置換で削除（期間内）: " + removed.length + "件（" + cnt(removed) + "）\n" +
             "繁殖: 既存カルテ更新 " + (replacedB + mergedB) + "頭（期間外の経過記録 " + carried + " 行は引き継ぎ）\n" +
