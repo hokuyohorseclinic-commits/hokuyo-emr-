@@ -453,16 +453,24 @@ function firestoreWrite(docName, data, opts) {
 // 実際の送信（デバウンス後）。成功/失敗を記録し、失敗分は再送用に保持
 function _doFirestoreWrite(docName, d) {
   var p;
-  if (docName === "cases" && Array.isArray(d) && d.length > 200) {
-    _addDebug("casesチャンク書き込み: " + d.length + "件");
-    p = _writeCasesChunked(d);
-  } else {
-    p = firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
-      data: d,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: _deviceId,
-      dataVersion: SYNC_DATA_VERSION
-    });
+  // ★ undefined を含むデータは Firestore が同期例外で拒否し、以前は .catch に乗らず無言で止まっていた
+  //   （2026-11-06〜07 の「Safari/Chrome からカルテだけ送れない」原因）。JSON 往復で undefined を除去し、
+  //   同期例外も必ずログ・失敗記録に乗せる
+  try {
+    if (d !== undefined && d !== null && typeof d === "object") d = JSON.parse(JSON.stringify(d));
+    if (docName === "cases" && Array.isArray(d) && d.length > 200) {
+      _addDebug("casesチャンク書き込み: " + d.length + "件");
+      p = _writeCasesChunked(d);
+    } else {
+      p = firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
+        data: d,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedBy: _deviceId,
+        dataVersion: SYNC_DATA_VERSION
+      });
+    }
+  } catch (syncErr) {
+    p = Promise.reject(syncErr);
   }
   return p.then(function() {
     var now = new Date();
