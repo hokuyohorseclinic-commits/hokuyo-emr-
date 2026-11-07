@@ -115,42 +115,43 @@ function lsSetData(jsonStr) {
 // ═══════════════════════════════════════════
 // Firebase Cloud Sync Layer — 北洋ホースクリニック
 // ═══════════════════════════════════════════
-//
-// 使い方:
-// 1. Firebase コンソール (https://console.firebase.google.com) でプロジェクトを作成
-// 2. Firestore Database を有効化（本番モードまたはテストモード）
-// 3. 下記の firebaseConfig に設定値を貼り付け
-// 4. セキュリティルール設定（後述）
+// 2026-11 改修（同期方式 v2）
+//   ・カルテ(cases)・馬(horses) は「1件＝1ドキュメント」で保存（コレクション cases / horses）
+//     - 保存は差分更新（変わった項目・来院行だけ送る）。来院行・所見行は rid 付きのマップで持つので
+//       2台で同じカルテの別の行を触っても消し合わない
+//     - 削除は _deleted フラグ（墓石）を残す → 古い端末からの復活を防ぐ
+//     - オフライン時は Firestore の端末内キューに積まれ、復帰時に自動送信（ブラウザを閉じても消えない）
+//   ・その他のマスタ・入金等は従来どおり clinicData/<項目> に1ドキュメントで保存
+//   ・currentVet（画面の「獣医師（現在）」）は端末ごとの設定にし、同期しない
 //
 var FIREBASE_ENABLED = false;
 var firebaseDB = null;
 var _firestoreUnsubscribers = [];
-var _syncStatus = "offline"; // "online" | "syncing" | "offline" | "error"
+var _syncStatus = "offline"; // "online" | "syncing" | "offline" | "error" | "blocked"
 var _syncStatusListeners = [];
 var _lastSyncTime = null;
-var _firestoreWriteEnabled = false; // 初回ロード完了まで書き込み禁止
-var _initialSnapshotCount = 0; // 初回onSnapshot受信カウンター
-var _debugLog = []; // デバッグログ（画面表示用）
+var _firestoreWriteEnabled = false; // 初回ロード完了まで（従来方式ドキュメントの）書き込み禁止
+var _initialSnapshotCount = 0;
+var _debugLog = [];
 var _lastWriteInfo = "なし";
-var _firebaseDataCounts = {}; // Firebase側のデータ件数記録（上書き保護用）
-var _lastBackupTime = 0; // 最終バックアップ時刻
+var _firebaseDataCounts = {};
+var _lastBackupTime = 0;
 var _lastReceiveInfo = "なし";
-// ─── 同期の可視化・上書き保護（2026-09 改修）───
-var SYNC_DATA_VERSION = "2026-09-06a";
-var OVERWRITE_PROTECT_RATIO = 0.1;   // ローカル件数がFirebase件数の10%未満なら書き込みを保留（旧: 50%）
-var _blockedWrites = {};   // 上書き保護で保留中の書き込み {docName: {data, localCount, remoteCount, reason, time}}
-var _failedWrites = {};    // 送信エラーになった書き込み {docName: {data, error, time}}
-var _lastRemoteJSON = {};  // 直近に受信したデータ(JSON文字列) — 受信データの書き戻し判定用
-var _initialSnapshotReceived = {}; // 初回snapshotを正常受信済みのdoc
-var _docLastWrite = {};    // {docName: Date} 項目別の最終書き込み成功時刻
-var _docLastReceive = {};  // {docName: Date} 項目別の最終受信時刻
-var _forceWriteUntil = 0;  // 手動「今、書き込み許可」の有効期限 (ms)
+var SYNC_DATA_VERSION = "2026-11-07v2";
+var OVERWRITE_PROTECT_RATIO = 0.1;
+var _blockedWrites = {};
+var _failedWrites = {};
+var _lastRemoteJSON = {};
+var _initialSnapshotReceived = {};
+var _docLastWrite = {};
+var _docLastReceive = {};
+var _forceWriteUntil = 0;
 var _listenerRestartTimer = null;
-var _listenersRequested = false; // Reactがコールバック登録済み（認証後の再購読に使用）
+var _listenersRequested = false;
 function _addDebug(msg) {
   var t = new Date().toLocaleTimeString("ja-JP");
   _debugLog.push(t + " " + msg);
-  if (_debugLog.length > 20) _debugLog.shift();
+  if (_debugLog.length > 40) _debugLog.shift();
   console.log("[Debug] " + msg);
 }
 var _deviceId = (function() {
@@ -161,9 +162,25 @@ var _deviceId = (function() {
   }
   return id;
 })();
+// ─── 固有ID（端末間で衝突しない）───
+// 端末番号: 端末IDのハッシュ 0〜999。レコードID = ミリ秒×1000 + 端末番号（数値のまま。既存IDと互換）
+function _hashSlot(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) % 1000; }
+var _deviceSlot = _hashSlot(_deviceId);
+var _lastIdMs = 0;
+function newRecordId() {
+  var t = Date.now();
+  if (t <= _lastIdMs) t = _lastIdMs + 1;
+  _lastIdMs = t;
+  return t * 1000 + _deviceSlot;
+}
+// 行ID（来院行・所見行）: 英数字とアンダースコアのみ
+var _ridCounter = 0;
+function newRowId() {
+  _ridCounter = (_ridCounter + 1) % 1296;
+  return "r" + Date.now().toString(36) + "_" + _deviceSlot.toString(36) + ("00" + _ridCounter.toString(36)).slice(-2) + Math.random().toString(36).substr(2, 3);
+}
 
 // ─── Firebase設定 ───
-// ★★★ ここに Firebase コンソールから取得した設定を貼り付けてください ★★★
 var firebaseConfig = {
   apiKey: "AIzaSyCpBn2haBU1zEIepTpCwF8KeL5v_2_Lnzc",
   authDomain: "hokuyo-emr.firebaseapp.com",
@@ -209,11 +226,7 @@ function _setupAuth() {
       console.log("[Auth] ログイン: " + user.email);
       document.getElementById("loginOverlay").style.display = "none";
       document.getElementById("root").style.display = "block";
-      if (!_authReady) {
-        _authReady = true;
-        // アプリの初期化はReactのレンダリング後に行われる
-      }
-      // ★ ログイン前にリスナーが開始されていた場合（permission-deniedで停止している）は再購読
+      if (!_authReady) { _authReady = true; }
       if (_listenersRequested) {
         _addDebug("ログイン検知 — Firestoreリスナーを再購読");
         startFirestoreListeners();
@@ -240,9 +253,11 @@ function initFirebase() {
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     var persistOptions = isIOS ? {} : { synchronizeTabs: true };
     firebaseDB.enablePersistence(persistOptions)
-      .then(function() { console.log("[Firebase] オフライン永続化: 有効 (iOS=" + isIOS + ")"); })
+      .then(function() { _persistenceOK = true; console.log("[Firebase] オフライン永続化: 有効 (iOS=" + isIOS + ")"); })
       .catch(function(err) {
+        _persistenceOK = false; _persistenceError = err.code + " - " + err.message;
         console.warn("[Firebase] 永続化エラー: " + err.code + " - " + err.message);
+        _addDebug("⚠️ オフライン永続化が無効: " + err.code + "（別タブで開いている可能性。オフライン入力は保持されません）");
       });
     FIREBASE_ENABLED = true;
     _setSyncStatus("online");
@@ -255,26 +270,21 @@ function initFirebase() {
     return false;
   }
 }
+var _persistenceOK = null, _persistenceError = "";
 
-// ─── ブラウザ閉じる前の保存保護 ───
+// ─── ブラウザ閉じる前の保存保護（従来方式ドキュメントのデバウンス待ちを即時送信）───
 window.addEventListener("beforeunload", function() {
-  // 未送信の書き込みキューを即座にフラッシュ
   if (FIREBASE_ENABLED && firebaseDB && _firestoreWriteEnabled) {
     Object.keys(_writeQueue).forEach(function(docName) {
       var d = _writeQueue[docName];
       if (_writeTimers[docName]) clearTimeout(_writeTimers[docName]);
       try {
-        // sendBeacon対応: 同期的にFirestoreへ書き込み試行
-        if (docName === "cases" && Array.isArray(d) && d.length > 200) {
-          _writeCasesChunked(d);
-        } else {
-          firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
-            data: d,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            updatedBy: _deviceId,
-            dataVersion: SYNC_DATA_VERSION
-          });
-        }
+        firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
+          data: d,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedBy: _deviceId,
+          dataVersion: SYNC_DATA_VERSION
+        });
         console.log("[Firebase] beforeunload flush: " + docName);
       } catch(e) {
         console.error("[Firebase] beforeunload flush error: " + docName, e);
@@ -282,16 +292,22 @@ window.addEventListener("beforeunload", function() {
     });
     _writeQueue = {};
   }
+  // 個別保存分（cases/horses）はデバウンスを待たずに送る
+  try { _flushItemSyncNow(); } catch(e) {}
 });
+// iOS Safari は beforeunload が発火しない → pagehide / 画面が隠れたときにも送る
+window.addEventListener("pagehide", function() { try { _flushItemSyncNow(); } catch(e) {} });
+document.addEventListener("visibilitychange", function() { if (document.visibilityState === "hidden") { try { _flushItemSyncNow(); } catch(e) {} } });
 
 // ─── 自動バックアップ（1日1回、Firebaseに保存）───
 function _autoBackupToFirebase() {
   if (!FIREBASE_ENABLED || !firebaseDB || !_firestoreWriteEnabled) return;
   var now = Date.now();
   var ONE_DAY = 24 * 60 * 60 * 1000;
-  // 最終バックアップから24時間以内はスキップ
   var lastBackup = parseInt(localStorage.getItem("hokuyo_last_backup") || "0");
   if (now - lastBackup < ONE_DAY) return;
+  // v2: カルテの初回受信が終わるまではバックアップしない（古いローカルを保存しないため）
+  if (!_itemState.cases.ready) return;
 
   var clinicData = lsGetData();
   if (!clinicData) return;
@@ -299,18 +315,14 @@ function _autoBackupToFirebase() {
   try {
     var parsed = JSON.parse(clinicData);
     var casesCount = parsed.cases ? parsed.cases.length : 0;
-    // データが少なすぎる場合はバックアップしない（破損データの保存防止）
     if (casesCount < 100) {
       console.log("[Backup] カルテ数が少なすぎるためスキップ: " + casesCount);
       return;
     }
-
     var _now = new Date();
     _now.setMinutes(_now.getMinutes() + _now.getTimezoneOffset() + 540); // JST
     var backupDate = _now.getFullYear() + "-" + String(_now.getMonth()+1).padStart(2,"0") + "-" + String(_now.getDate()).padStart(2,"0");
     var backupId = "backup_" + backupDate;
-
-    // 日次バックアップを保存（永久保持）
     var backupPayload = clinicData.length > 700000 ? LZString.compressToBase64(clinicData) : clinicData;
     firebaseDB.collection("backups").doc(backupId).set({
       data: backupPayload,
@@ -321,7 +333,6 @@ function _autoBackupToFirebase() {
     }).then(function() {
       localStorage.setItem("hokuyo_last_backup", String(now));
       _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件)");
-      console.log("[Backup] バックアップ成功（永久保持）: " + backupId);
     }).catch(function(err) {
       console.error("[Backup] バックアップエラー:", err);
     });
@@ -329,8 +340,6 @@ function _autoBackupToFirebase() {
     console.error("[Backup] バックアップ処理エラー:", e);
   }
 }
-
-// アプリ起動後30秒でバックアップチェック、以降6時間ごと
 setTimeout(function() {
   _autoBackupToFirebase();
   setInterval(_autoBackupToFirebase, 6 * 60 * 60 * 1000);
@@ -344,76 +353,51 @@ function _setSyncStatus(status) {
   }
   _syncStatusListeners.forEach(function(fn) { fn(status); });
 }
-
 function onSyncStatusChange(fn) {
   _syncStatusListeners.push(fn);
   return function() {
     _syncStatusListeners = _syncStatusListeners.filter(function(f) { return f !== fn; });
   };
 }
-
-// ─── Firestore コレクション設計 ───
-// 各データ種別を1つのドキュメントとして保存（データ量が少ないため効率的）
-// Collection: "clinicData"
-//   Document: "farms"      → { data: [...], updatedAt, updatedBy }
-//   Document: "horses"     → { data: [...], updatedAt, updatedBy }
-//   Document: "drugsMaster"→ { data: [...], updatedAt, updatedBy }
-//   Document: "treatmentsMaster" → { data: [...], updatedAt, updatedBy }
-//   Document: "breedingTreatments" → { data: [...], updatedAt, updatedBy }
-//   Document: "cases"      → { data: [...], updatedAt, updatedBy }
-//   Document: "payments"   → { data: [...], updatedAt, updatedBy }
-//   Document: "billingActual" → { data: {...}, updatedAt, updatedBy }
-//   Document: "purchaseHistory" → { data: [...], updatedAt, updatedBy }
-//   Document: "closedMonths" → { data: [...], updatedAt, updatedBy }
-//   Document: "insuranceList" → { data: [...], updatedAt, updatedBy }
-//   Document: "vets"       → { data: [...], updatedAt, updatedBy }
-//   Document: "currentVet" → { data: "...", updatedAt, updatedBy }
-
-var SYNC_COLLECTION = "clinicData";
-var SYNC_FIELDS = [
-  "farms", "horses", "drugsMaster", "treatmentsMaster",
-  "breedingTreatments", "cases", "payments", "billingActual",
-  "purchaseHistory", "closedMonths", "insuranceList", "vets", "currentVet", "memos"
-];
-
-// ─── Firestore 書き込み（デバウンス付き） ───
-var _writeTimers = {};
-var _writeQueue = {};
-var _skipNextWrite = {}; // （互換用・現在は内容比較で書き戻しを判定）
-
 function _notifySyncChange() {
-  // 状態値は変えずにUIへ再描画を促す（保留・失敗・キューの変化を反映）
   _syncStatusListeners.forEach(function(fn) { try { fn(_syncStatus); } catch(e) {} });
 }
+
+// ─── 従来方式（1項目＝1ドキュメント）の対象 ───
+// Collection: "clinicData" / Document: <項目名> → { data, updatedAt, updatedBy }
+// ※ cases・horses は v2 の個別保存へ移行済み（下記 ITEM_SYNC）。currentVet は端末ごとの設定になり同期しない
+var SYNC_COLLECTION = "clinicData";
+var SYNC_FIELDS = [
+  "farms", "drugsMaster", "treatmentsMaster",
+  "breedingTreatments", "payments", "billingActual",
+  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos"
+];
+
+// ─── 従来方式の書き込み（デバウンス付き） ───
+var _writeTimers = {};
+var _writeQueue = {};
 
 function _countOf(data) {
   return Array.isArray(data) ? data.length : -1;
 }
-
-// 書き込みを保留（画面に警告表示・後で手動送信可能）
 function _blockWrite(docName, data, reason, localCount, remoteCount) {
   _blockedWrites[docName] = {
     data: data, reason: reason, localCount: localCount, remoteCount: remoteCount, time: new Date()
   };
   _addDebug("⚠️ 書き込み保留: " + docName + " — " + reason);
-  console.warn("[Firebase] 書き込み保留: " + docName + " — " + reason + " (ローカル:" + localCount + " / Firebase:" + remoteCount + ")");
   _setSyncStatus("blocked");
 }
 
 function firestoreWrite(docName, data, opts) {
   opts = opts || {};
   if (!FIREBASE_ENABLED || !firebaseDB) return;
+  if (SYNC_FIELDS.indexOf(docName) === -1) return;   // v2 対象（cases/horses）はここでは扱わない
   try { if (!firebase.auth().currentUser) { _addDebug("未ログインのためスキップ: " + docName); return; } } catch(e) {}
   var json;
   try { json = JSON.stringify(data); } catch(e) { json = null; }
-  // リモート受信データをそのまま setState → useEffect で書き戻す場合はスキップ（ピンポン防止）
-  // ※ 旧実装のフラグ方式は setState が no-op のときフラグが残り、次の本物の編集を握りつぶす不具合があった
   if (!opts.force && json !== null && json === _lastRemoteJSON[docName]) {
-    delete _skipNextWrite[docName];
-    _addDebug("書き戻しスキップ(内容一致): " + docName);
-    return;
+    return; // 受信データの書き戻し（内容一致）はスキップ
   }
-  delete _skipNextWrite[docName];
   if (!_firestoreWriteEnabled && !opts.force) {
     _addDebug("初回ロード中スキップ: " + docName);
     return;
@@ -423,22 +407,16 @@ function firestoreWrite(docName, data, opts) {
   var remoteCount = remoteKnown ? _firebaseDataCounts[docName] : 0;
   var forced = opts.force || Date.now() < _forceWriteUntil;
   if (!forced) {
-    // ★ 上書き保護①: この項目をFirebaseから一度も受信できていない端末は書き込まない
-    //   （古いローカルデータでクラウドを上書きしてしまう事故を防ぐ）
     if (!_initialSnapshotReceived[docName]) {
       _blockWrite(docName, data, "Firebaseから未受信（通信・ログイン状態を確認）", localCount, remoteKnown ? remoteCount : null);
       return;
     }
-    // ★ 上書き保護②: ローカル件数がFirebase件数の10%未満（旧50%）なら保留
     if (localCount >= 0 && remoteKnown && remoteCount > 10 && localCount < remoteCount * OVERWRITE_PROTECT_RATIO) {
       _blockWrite(docName, data, "ローカル" + localCount + "件 < Firebase" + remoteCount + "件の" + Math.round(OVERWRITE_PROTECT_RATIO*100) + "%", localCount, remoteCount);
       return;
     }
-  } else if (Date.now() < _forceWriteUntil) {
-    _addDebug("手動許可中のため保護をバイパス: " + docName);
   }
   delete _blockedWrites[docName];
-  _addDebug("書き込み開始: " + docName + (localCount >= 0 ? " (" + localCount + "件)" : ""));
   _writeQueue[docName] = data;
   _notifySyncChange();
   if (_writeTimers[docName]) clearTimeout(_writeTimers[docName]);
@@ -458,17 +436,13 @@ function _doFirestoreWrite(docName, d) {
   //   同期例外も必ずログ・失敗記録に乗せる
   try {
     if (d !== undefined && d !== null && typeof d === "object") d = JSON.parse(JSON.stringify(d));
-    if (docName === "cases" && Array.isArray(d) && d.length > 200) {
-      _addDebug("casesチャンク書き込み: " + d.length + "件");
-      p = _writeCasesChunked(d);
-    } else {
-      p = firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
-        data: d,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        updatedBy: _deviceId,
-        dataVersion: SYNC_DATA_VERSION
-      });
-    }
+    // v2: cases は個別保存（ITEM_SYNC）へ移行済みのため、チャンク書き込みは廃止
+    p = firebaseDB.collection(SYNC_COLLECTION).doc(docName).set({
+      data: d,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: _deviceId,
+      dataVersion: SYNC_DATA_VERSION
+    });
   } catch (syncErr) {
     p = Promise.reject(syncErr);
   }
@@ -490,35 +464,7 @@ function _doFirestoreWrite(docName, d) {
   });
 }
 
-// cases が大きい場合のチャンク書き込み（Promiseを返す）
-function _writeCasesChunked(casesArr) {
-  var CHUNK = 200;
-  var totalChunks = Math.ceil(casesArr.length / CHUNK);
-  var batch = firebaseDB.batch();
-  // メインドキュメントにメタ情報
-  var mainRef = firebaseDB.collection(SYNC_COLLECTION).doc("cases");
-  batch.set(mainRef, {
-    chunked: true,
-    totalChunks: totalChunks,
-    totalCount: casesArr.length,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    updatedBy: _deviceId,
-    dataVersion: SYNC_DATA_VERSION
-  });
-  // 各チャンクを別ドキュメントに
-  for (var i = 0; i < totalChunks; i++) {
-    var chunkRef = firebaseDB.collection(SYNC_COLLECTION).doc("cases_chunk_" + i);
-    batch.set(chunkRef, {
-      data: casesArr.slice(i * CHUNK, (i + 1) * CHUNK),
-      chunkIndex: i,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  }
-  return batch.commit();
-}
-
-// ─── 手動操作（同期パネルから呼び出し）───
-// 保留中の1項目を今すぐ書き込む（保護バイパス）
+// ─── 手動操作（同期パネルから呼び出し・従来方式の項目のみ）───
 function forceWriteDoc(docName) {
   var b = _blockedWrites[docName] || _failedWrites[docName];
   if (!b) return;
@@ -526,7 +472,6 @@ function forceWriteDoc(docName) {
   delete _failedWrites[docName];
   firestoreWrite(docName, b.data, { force: true });
 }
-// 今後60秒間、上書き保護を無効化し、保留・失敗分を即時再送
 function allowWritesNow(seconds) {
   _forceWriteUntil = Date.now() + (seconds || 60) * 1000;
   _firestoreWriteEnabled = true;
@@ -535,22 +480,6 @@ function allowWritesNow(seconds) {
   Object.keys(_failedWrites).forEach(function(k) { forceWriteDoc(k); });
   _setSyncStatus("online");
 }
-// ローカル(localStorage)の全データをFirebaseへ強制送信
-function forceWriteAll() {
-  var raw = lsGetData();
-  if (!raw) { alert("ローカルデータがありません"); return; }
-  var parsed;
-  try { parsed = JSON.parse(raw); } catch(e) { alert("ローカルデータの読み取りに失敗しました"); return; }
-  _forceWriteUntil = Date.now() + 60 * 1000;
-  _firestoreWriteEnabled = true;
-  _blockedWrites = {}; _failedWrites = {};
-  _addDebug("全項目を強制送信");
-  SYNC_FIELDS.forEach(function(k) {
-    if (parsed[k] === undefined) return;
-    firestoreWrite(k, parsed[k], { force: true });
-  });
-}
-// 保留中の項目を破棄し、Firebaseの内容をローカルへ戻す
 function discardBlockedWrite(docName) {
   delete _blockedWrites[docName];
   var json = _lastRemoteJSON[docName];
@@ -560,11 +489,9 @@ function discardBlockedWrite(docName) {
   }
   _setSyncStatus(Object.keys(_blockedWrites).length ? "blocked" : "online");
 }
-// 失敗分をまとめて再送
 function retryFailedWrites() {
   Object.keys(_failedWrites).forEach(function(k) { forceWriteDoc(k); });
 }
-// 同期パネル表示用のレポート
 function getSyncReport() {
   var local = {};
   try { local = JSON.parse(lsGetData() || "{}"); } catch(e) {}
@@ -585,22 +512,22 @@ function getSyncReport() {
     deviceId: _deviceId, status: _syncStatus, writeEnabled: _firestoreWriteEnabled,
     forceUntil: _forceWriteUntil, rows: rows, log: _debugLog.slice(),
     lastWriteInfo: _lastWriteInfo, lastReceiveInfo: _lastReceiveInfo,
-    user: (function(){ try { return firebase.auth().currentUser ? firebase.auth().currentUser.email : null; } catch(e) { return null; } })()
+    user: (function(){ try { return firebase.auth().currentUser ? firebase.auth().currentUser.email : null; } catch(e) { return null; } })(),
+    items: getItemSyncReport(),
+    persistence: _persistenceOK, persistenceError: _persistenceError,
+    online: navigator.onLine
   };
 }
 function syncHasUnsent() {
-  return Object.keys(_blockedWrites).length + Object.keys(_failedWrites).length + Object.keys(_writeQueue).length;
+  var n = Object.keys(_blockedWrites).length + Object.keys(_failedWrites).length + Object.keys(_writeQueue).length;
+  return n + itemSyncPendingCount(true);
 }
 
-// ─── Firestore リアルタイム購読 ───
-// 各ドキュメントの変更を監視し、他デバイスからの変更を自動反映
+// ─── 従来方式のリアルタイム購読 ───
 var _remoteUpdateCallbacks = {};
-
 function registerRemoteUpdateCallback(docName, callback) {
   _remoteUpdateCallbacks[docName] = callback;
 }
-
-// リスナーが permission-denied 等で停止した場合の自動再購読（15秒後・重複防止）
 function _scheduleListenerRestart(reason) {
   if (_listenerRestartTimer) return;
   _listenerRestartTimer = setTimeout(function() {
@@ -612,7 +539,6 @@ function _scheduleListenerRestart(reason) {
     startFirestoreListeners();
   }, 15000);
 }
-
 function _markInitialReceived(docName) {
   if (_initialSnapshotReceived[docName]) return;
   _initialSnapshotReceived[docName] = true;
@@ -623,52 +549,21 @@ function _markInitialReceived(docName) {
     _setSyncStatus(Object.keys(_blockedWrites).length ? "blocked" : "online");
   }
 }
-
-// 未受信中にローカルで追加されたレコード(id付き)をリモートへマージ（リモート側の削除・更新はそのまま）
-// ※ この端末で「今回起動してから」作ったレコード（id = Date.now()）だけを対象にする。
-//    古いローカルデータ（他端末で削除・置換済みのカルテ等）を復活させないため。
-var _appStartTime = Date.now();
-function _mergeLocalExtras(remote, local) {
-  if (!Array.isArray(remote) || !Array.isArray(local)) return null;
-  var ids = {};
-  remote.forEach(function(x) { if (x && x.id !== undefined) ids[x.id] = 1; });
-  var since = _appStartTime - 5 * 60 * 1000;
-  var extra = local.filter(function(x) { return x && x.id !== undefined && !ids[x.id] && Number(x.id) >= since; });
-  return extra.length ? remote.concat(extra) : null;
-}
-
 function _applyRemote(docName, data, updatedBy) {
   var now = new Date();
-  var merged = null;
-  var remoteLen = _countOf(data);
-  // 「未受信」で保留されていたローカル入力があれば、受信データに追加分だけマージして送信する
-  var b = _blockedWrites[docName];
-  if (b && /未受信/.test(b.reason)) {
-    delete _blockedWrites[docName];
-    merged = _mergeLocalExtras(data, b.data);
-    if (merged) {
-      _addDebug("未受信中のローカル入力 " + (merged.length - data.length) + "件をマージ: " + docName);
-      data = merged;
-    }
-  }
-  if (Array.isArray(data)) _firebaseDataCounts[docName] = remoteLen;
+  if (Array.isArray(data)) _firebaseDataCounts[docName] = data.length;
   try { _lastRemoteJSON[docName] = JSON.stringify(data); } catch(e) {}
   _docLastReceive[docName] = now;
   _lastReceiveInfo = docName + " from " + (updatedBy || "?").substr(-8) + " @ " + now.toLocaleTimeString("ja-JP");
-  _addDebug("受信: " + docName + (Array.isArray(data) ? " " + data.length + "件" : "") + " (from " + (updatedBy || "?").substr(-8) + ")");
-  _skipNextWrite[docName] = true; // 互換用（判定には内容比較を使用）
   if (_remoteUpdateCallbacks[docName]) _remoteUpdateCallbacks[docName](data);
-  if (merged) firestoreWrite(docName, merged, { force: true });
   _setSyncStatus(Object.keys(_blockedWrites).length ? "blocked" : "online");
 }
 
 function startFirestoreListeners() {
   if (!FIREBASE_ENABLED || !firebaseDB) return;
   _listenersRequested = true;
-  // 既存のリスナーを解除
   _firestoreUnsubscribers.forEach(function(unsub) { unsub(); });
   _firestoreUnsubscribers = [];
-  // 初回ロード: 書き込み禁止にリセット
   _firestoreWriteEnabled = false;
   _initialSnapshotCount = 0;
   _initialSnapshotReceived = {};
@@ -678,36 +573,12 @@ function startFirestoreListeners() {
     var unsub = firebaseDB.collection(SYNC_COLLECTION).doc(docName)
       .onSnapshot(function(snapshot) {
         var firstTime = !_initialSnapshotReceived[docName];
-        if (!snapshot.exists) {
-          // ドキュメント未作成（新規項目）— 正常受信として扱う
-          _markInitialReceived(docName);
-          return;
-        }
+        if (!snapshot.exists) { _markInitialReceived(docName); return; }
         var docData = snapshot.data();
-        // 自分のデバイスからの更新は無視（ループ防止）
-        // ただし初回ロード中は全て受け入れる（Firestoreのデータを優先）
         if (!firstTime && _firestoreWriteEnabled && docData.updatedBy === _deviceId) return;
-
-        // cases チャンク対応
-        if (docName === "cases" && docData.chunked) {
-          _loadCasesChunked(docData.totalChunks).then(function(allCases) {
-            _markInitialReceived("cases");
-            _applyRemote("cases", allCases, docData.updatedBy);
-          }).catch(function(err) {
-            _addDebug("casesチャンク受信エラー: " + (err.message || err));
-            console.error("[Firebase] casesチャンク受信エラー:", err);
-            _setSyncStatus("error");
-            _scheduleListenerRestart("casesチャンク受信エラー");
-          });
-          return;
-        }
-
         _markInitialReceived(docName);
-        if (docData.data !== undefined) {
-          _applyRemote(docName, docData.data, docData.updatedBy);
-        }
+        if (docData.data !== undefined) _applyRemote(docName, docData.data, docData.updatedBy);
       }, function(err) {
-        // onSnapshot のエラーは購読停止を意味する → 未受信のまま保持し、後で再購読
         console.error("[Firebase] リスナーエラー (" + docName + "):", err);
         _addDebug("リスナーエラー: " + docName + " - " + (err.code || err.message));
         _setSyncStatus("error");
@@ -715,8 +586,6 @@ function startFirestoreListeners() {
       });
     _firestoreUnsubscribers.push(unsub);
   });
-  // フォールバック: 8秒経っても初回ロードが完了しない場合は書き込みを許可
-  // （未受信の項目は firestoreWrite 側の保護①で個別に保留される）
   setTimeout(function() {
     if (!_firestoreWriteEnabled) {
       var missing = SYNC_FIELDS.filter(function(k) { return !_initialSnapshotReceived[k]; });
@@ -725,113 +594,590 @@ function startFirestoreListeners() {
       _setSyncStatus(missing.length ? "error" : "online");
     }
   }, 8000);
-  console.log("[Firebase] リアルタイムリスナー開始 (" + SYNC_FIELDS.length + " ドキュメント)");
+  // v2: 個別保存コレクションの購読
+  startItemListeners();
+  console.log("[Firebase] リアルタイムリスナー開始 (" + SYNC_FIELDS.length + " ドキュメント + cases/horses)");
 }
 
-function _loadCasesChunked(totalChunks) {
-  var promises = [];
-  for (var i = 0; i < totalChunks; i++) {
-    promises.push(
-      firebaseDB.collection(SYNC_COLLECTION).doc("cases_chunk_" + i).get()
-    );
-  }
-  return Promise.all(promises).then(function(snapshots) {
-    var allCases = [];
-    snapshots.forEach(function(snap) {
-      if (snap.exists && snap.data().data) {
-        allCases = allCases.concat(snap.data().data);
-      }
-    });
-    return allCases;
+// ═══════════════════════════════════════════
+// v2: 1件＝1ドキュメントの同期（cases / horses）
+// ═══════════════════════════════════════════
+// Firestore 側の形:
+//   cases/<id>  : { ...カルテのヘッダー項目, rk: "visits"|"findings"|null, rows: { <rid>: {...行, seq, vet} },
+//                  _v: 2, _updatedAt, _updatedBy, _deleted?: true }
+//   horses/<id> : { ...馬の項目, _v: 2, _updatedAt, _updatedBy, _deleted?: true }
+//   clinicData/meta : { cases: {done, count, at, by}, horses: {...}, claim: {name, by, at} }   ← 移行の完了印
+// メモリ上（React state）の形は従来どおり（visits / findings は配列）。
+var ITEM_DEFS = {
+  cases:  { col: "cases",  legacyDoc: "cases",  rowsKeyOf: function(c) { return c.type === "一般" ? "visits" : c.type === "繁殖" ? "findings" : null; } },
+  horses: { col: "horses", legacyDoc: "horses", rowsKeyOf: function() { return null; } }
+};
+var ITEM_INTERNAL = { _v: 1, _updatedAt: 1, _updatedBy: 1, _deleted: 1, _deletedAt: 1, _migrated: 1, rows: 1, rk: 1 };
+var _itemState = {};
+Object.keys(ITEM_DEFS).forEach(function(name) {
+  _itemState[name] = {
+    ready: false,            // 初回の突き合わせが済み、差分書き込みが有効
+    gotFirst: false,         // 初回スナップショット受信済み
+    firstEmpty: null,
+    lastSynced: {},          // id → ドキュメント形（最後にサーバーと一致していると分かっている内容）
+    lastState: null,         // 直前に useEffect で見た配列
+    dirty: {},               // 書き込み有効化前にローカルで変更された id
+    dirtyDel: {},            // 書き込み有効化前にローカルで削除された id（明示）
+    base: {},                // dirty 項目の変更元（サーバー版・ドキュメント形）
+    forceIds: {},            // 次回パスで必ず比較する id
+    pending: 0,              // 未送信（サーバー確認待ち）の書き込み数
+    sent: 0, received: 0, count: 0,
+    failedIds: {},           // 送信エラーになった id（「再送」で最新 state から再差分）
+    lastReceive: null, lastSend: null,
+    error: null,
+    unsub: null,
+    migrating: null          // {done, total}
+  };
+});
+var _remoteObjs = (typeof WeakSet !== "undefined") ? new WeakSet() : { add: function(){}, has: function(){ return false; } };
+var _itemCallbacks = {};      // name → function(upserts, deletedIds)  state へ反映
+var _itemReconcile = {};      // name → function(remoteIdSet) → 返り値: ローカルだけにある id の配列
+var _metaState = null;        // clinicData/meta の内容（null = 未受信）
+var _metaUnsub = null;
+var _legacyChecked = {};      // name → true/false（旧ドキュメントの有無）
+
+function registerItemSync(name, applyFn, reconcileFn) {
+  _itemCallbacks[name] = applyFn;
+  _itemReconcile[name] = reconcileFn;
+}
+function _clean(obj) { return JSON.parse(JSON.stringify(obj)); }   // undefined を除去（Firestore は undefined 不可）
+function _idKey(id) { return String(id); }
+function _numId(s) { var n = Number(s); return (s !== "" && !isNaN(n) && String(n) === String(s)) ? n : s; }
+
+// 行の rid/seq を保証（既存の行オブジェクトに直接付与して identity を保つ）
+function ensureRowIds(c, deterministic) {
+  var def = ITEM_DEFS.cases;
+  var rk = def.rowsKeyOf(c);
+  if (!rk || !Array.isArray(c[rk])) return rk;
+  c[rk].forEach(function(r, i) {
+    if (!r || typeof r !== "object") return;
+    if (!r.rid) r.rid = deterministic ? ("m" + i) : newRowId();
+    if (r.seq === undefined || r.seq === null) r.seq = deterministic ? i : Date.now() + i;
   });
+  return rk;
 }
-
-// ─── 初回同期: Firestoreにデータがあればロード、なければローカルをアップロード ───
-function initialSync(localData) {
-  if (!FIREBASE_ENABLED || !firebaseDB) {
-    return Promise.resolve(localData);
+// メモリ形 → ドキュメント形
+function itemToDoc(name, item) {
+  var def = ITEM_DEFS[name];
+  var d = {};
+  var rk = def.rowsKeyOf(item);
+  Object.keys(item).forEach(function(k) {
+    if (k === rk) return;
+    if (ITEM_INTERNAL[k]) return;
+    if (item[k] === undefined) return;
+    d[k] = item[k];
+  });
+  d.rk = rk || null;
+  if (rk) {
+    var rows = {};
+    (item[rk] || []).forEach(function(r) { if (r && r.rid) rows[r.rid] = r; });
+    d.rows = rows;   // ※ set(merge) で送るときは空なら外す（空マップはサーバーの rows を消すため）→ _docForSet
   }
-  _setSyncStatus("syncing");
-  return firebaseDB.collection(SYNC_COLLECTION).doc("farms").get()
-    .then(function(snapshot) {
-      if (snapshot.exists && snapshot.data().data) {
-        // Firestoreにデータあり → 全ドキュメントをロード
-        console.log("[Firebase] Firestoreからデータをロード中...");
-        return _loadAllFromFirestore().then(function(cloudData) {
-          _setSyncStatus("online");
-          return cloudData;
-        });
-      } else {
-        // Firestoreにデータなし → ローカルデータをアップロード
-        console.log("[Firebase] 初回同期: ローカルデータをアップロード中...");
-        return _uploadAllToFirestore(localData).then(function() {
-          _setSyncStatus("online");
-          return localData;
-        });
-      }
-    })
-    .catch(function(err) {
-      console.error("[Firebase] 初回同期エラー:", err);
-      _setSyncStatus("error");
-      return localData; // エラー時はローカルデータを使用
+  return d;
+}
+function _docForSet(doc) { var d = Object.assign({}, doc); if (d.rows && !Object.keys(d.rows).length) delete d.rows; return d; }
+function _rowSort(rk) {
+  if (rk === "findings") return function(a, b) { var da = a.date || "", db = b.date || ""; if (da !== db) return da < db ? 1 : -1; return (Number(b.seq) || 0) - (Number(a.seq) || 0) || String(b.rid).localeCompare(String(a.rid)); };
+  return function(a, b) { return (Number(a.seq) || 0) - (Number(b.seq) || 0) || String(a.rid).localeCompare(String(b.rid)); };
+}
+// ドキュメント形 → メモリ形
+function docToItem(name, d) { var item = _docToItemRaw(name, d); _remoteObjs.add(item); return item; }
+function _docToItemRaw(name, d) {
+  var item = {};
+  Object.keys(d).forEach(function(k) { if (!ITEM_INTERNAL[k]) item[k] = d[k]; });
+  var rk = d.rk;
+  if (rk) {
+    var arr = Object.keys(d.rows || {}).map(function(rid) { var r = d.rows[rid]; if (r && typeof r === "object" && !r.rid) r.rid = rid; return r; }).filter(Boolean);
+    arr.sort(_rowSort(rk));
+    item[rk] = arr;
+  }
+  return item;
+}
+// 3方向マージ（突き合わせ前にローカルで変更した項目に、他端末の更新が届いたとき）
+//   base: 変更の元になったサーバー版（無ければ null）, local: この端末の現在, remote: 届いた最新。いずれもドキュメント形
+//   ヘッダー: ローカルが base から変えた項目だけローカル優先、それ以外はリモート。行: rid ごとに同じ考え方
+function _merge3(base, local, remote) {
+  var out = _clean(remote);
+  var keys = {};
+  Object.keys(local).forEach(function(k) { keys[k] = 1; }); if (base) Object.keys(base).forEach(function(k) { keys[k] = 1; });
+  Object.keys(keys).forEach(function(k) {
+    if (k === "rows" || ITEM_INTERNAL[k] && k !== "rk") return;
+    var lv = _j(local[k]), bv = _j(base ? base[k] : undefined);
+    if (lv !== bv) { if (local[k] === undefined) delete out[k]; else out[k] = _clean(local[k]); }
+  });
+  if (local.rk || remote.rk) {
+    out.rows = out.rows || {};
+    var lrows = local.rows || {}, brows = (base && base.rows) || {}, rrows = remote.rows || {};
+    Object.keys(lrows).forEach(function(rid) {
+      if (!brows[rid] || _j(lrows[rid]) !== _j(brows[rid])) out.rows[rid] = _clean(lrows[rid]);   // ローカルで追加・変更した行
     });
+    Object.keys(brows).forEach(function(rid) {
+      if (lrows[rid]) return;
+      if (rrows[rid] && _j(rrows[rid]) === _j(brows[rid])) delete out.rows[rid];                     // ローカルで消した行（他端末が触っていなければ消す）
+    });
+    out.rk = out.rk || local.rk || remote.rk;
+  }
+  return out;
+}
+// 比較用の安定した JSON（キー順に依存しない。Firestore から戻るマップはキー順が変わるため）
+function _j(x) {
+  try { return JSON.stringify(_sortKeys(x === undefined ? null : x)); } catch(e) { return String(x); }
+}
+function _sortKeys(v) {
+  if (Array.isArray(v)) return v.map(_sortKeys);
+  if (v && typeof v === "object") { var o = {}; Object.keys(v).sort().forEach(function(k) { if (v[k] !== undefined) o[k] = _sortKeys(v[k]); }); return o; }
+  return v;
 }
 
-function _loadAllFromFirestore() {
-  return firebaseDB.collection(SYNC_COLLECTION).get()
-    .then(function(querySnapshot) {
-      var result = {};
-      var casesChunked = false;
-      var totalChunks = 0;
-      querySnapshot.forEach(function(doc) {
-        var data = doc.data();
-        if (doc.id === "cases" && data.chunked) {
-          casesChunked = true;
-          totalChunks = data.totalChunks;
-        } else if (!doc.id.startsWith("cases_chunk_") && data.data !== undefined) {
-          result[doc.id] = data.data;
-        }
-      });
-      if (casesChunked) {
-        return _loadCasesChunked(totalChunks).then(function(allCases) {
-          result.cases = allCases;
-          return result;
-        });
-      }
-      return result;
-    });
-}
-
-function _uploadAllToFirestore(localData) {
-  var batch = firebaseDB.batch();
-  var keys = Object.keys(localData);
-  keys.forEach(function(key) {
-    if (SYNC_FIELDS.indexOf(key) === -1) return;
-    // cases のチャンク判定
-    if (key === "cases" && Array.isArray(localData[key]) && localData[key].length > 200) {
-      // チャンクは batch 外で処理
+// ローカルの配列と前回状態を比べ、変わった分だけ Firestore に書く
+function syncItemsFromState(name, arr) {
+  var st = _itemState[name];
+  if (!FIREBASE_ENABLED || !firebaseDB) return;
+  var prev = st.lastState;
+  st.lastState = arr;
+  if (!Array.isArray(arr)) return;
+  if (prev === null && !Object.keys(st.forceIds).length) return;   // 起動直後の初回パスは現状を覚えるだけ（変更扱いにしない）
+  var prevMap = {};
+  if (Array.isArray(prev)) prev.forEach(function(x) { if (x && x.id !== undefined) prevMap[_idKey(x.id)] = x; });
+  var curIds = {};
+  var ops = [];          // {type:"set"|"update"|"tomb", id, doc?, fields?, prevLast}
+  var patches = [];      // 受信済みの行が欠けていたカルテ（古い編集コピー）を補正
+  var ready = st.ready;
+  arr.forEach(function(item) {
+    if (!item || item.id === undefined || item.id === null) return;
+    var key = _idKey(item.id);
+    curIds[key] = 1;
+    var p = prevMap[key];
+    var forced = st.forceIds[key];
+    if (p === item && !forced) return;                        // 同一オブジェクト → 変更なし
+    if (_remoteObjs.has(item) && !forced) return;             // 受信したばかりのオブジェクト → 書き戻し不要
+    if (!ready) { if (!st.dirty[key]) { st.dirty[key] = 1; st.base[key] = st.lastSynced[key] ? _clean(st.lastSynced[key]) : null; _saveDirty(name); } return; } // 初回突き合わせ前 → 後でまとめて送る
+    delete st.forceIds[key];
+    var last = st.lastSynced[key];
+    if (name === "cases") ensureRowIds(item, !last);
+    var doc = _clean(itemToDoc(name, item));
+    if (!last) {
+      ops.push({ type: "set", id: key, doc: doc, prevLast: undefined });
+      st.lastSynced[key] = doc;
       return;
     }
-    var ref = firebaseDB.collection(SYNC_COLLECTION).doc(key);
-    batch.set(ref, {
-      data: localData[key],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: _deviceId,
-      dataVersion: SYNC_DATA_VERSION
+    // 差分: ヘッダー項目
+    var fields = {}; var changed = 0; var FieldPath = firebase.firestore.FieldPath;
+    Object.keys(doc).forEach(function(k) {
+      if (k === "rows") return;
+      if (_j(doc[k]) !== _j(last[k])) { fields[k] = doc[k]; changed++; }
+    });
+    Object.keys(last).forEach(function(k) {
+      if (k === "rows" || ITEM_INTERNAL[k] && k !== "rk") return;
+      if (!(k in doc)) { fields[k] = firebase.firestore.FieldValue.delete(); changed++; }
+    });
+    // 差分: 行
+    var rowOps = [];
+    if (doc.rk || last.rk) {
+      var lrows = last.rows || {}, drows = doc.rows || {};
+      Object.keys(drows).forEach(function(rid) {
+        if (_j(drows[rid]) !== _j(lrows[rid])) rowOps.push({ rid: rid, value: drows[rid] });
+      });
+      var prevRows = {};
+      if (p && doc.rk && Array.isArray(p[doc.rk])) p[doc.rk].forEach(function(r) { if (r && r.rid) prevRows[r.rid] = 1; });
+      var missing = [];
+      Object.keys(lrows).forEach(function(rid) {
+        if (drows[rid]) return;
+        if (prevRows[rid]) rowOps.push({ rid: rid, value: firebase.firestore.FieldValue.delete() });   // この端末で（直前の状態から）消した行
+        else missing.push(lrows[rid]);                                                                // 古い編集コピーに無かっただけ → 残す
+      });
+      if (missing.length) patches.push({ id: item.id, rk: doc.rk, rows: missing });
+    }
+    if (!changed && !rowOps.length) { st.lastSynced[key] = doc; return; }
+    // lastSynced を更新（欠けていた行は保持）
+    var newLast = _clean(doc);
+    if (patches.length && patches[patches.length - 1].id === item.id) {
+      newLast.rows = newLast.rows || {};
+      patches[patches.length - 1].rows.forEach(function(r) { newLast.rows[r.rid] = r; });
+    }
+    st.lastSynced[key] = newLast;
+    ops.push({ type: "update", id: key, fields: fields, rowOps: rowOps, prevLast: last });
+  });
+  // 削除（前回あって今回無い → 墓石）
+  Object.keys(prevMap).forEach(function(key) {
+    if (curIds[key]) return;
+    if (!ready) { st.dirtyDel[key] = 1; _saveDirty(name); return; }   // 突き合わせ前の削除 → ready 時に墓石
+    if (!st.lastSynced[key]) return;   // サーバーに無いものは何もしない
+    ops.push({ type: "tomb", id: key, prevLast: st.lastSynced[key] });
+    delete st.lastSynced[key];
+  });
+  if (ops.length) _enqueueItemOps(name, ops);
+  if (patches.length && _itemPatchCallbacks[name]) {
+    _addDebug("他端末の行 " + patches.reduce(function(s, x) { return s + x.rows.length; }, 0) + " 件を編集コピーへ補完: " + name);
+    setTimeout(function() { _itemPatchCallbacks[name](patches); }, 0);
+  }
+}
+var _itemPatchCallbacks = {};
+function registerItemPatch(name, fn) { _itemPatchCallbacks[name] = fn; }
+
+// 書き込み実行（少数は個別、多数はバッチ）。オフライン時は SDK がキューに積み、復帰時に送る
+var _itemOpQueue = {};
+var _itemOpTimer = {};
+function _enqueueItemOps(name, ops) {
+  var st = _itemState[name];
+  ops.forEach(function(op) { st.unacked[op.id] = 1; });   // サーバー確認まで「未確認」として永続化（次回起動時に再差分）
+  _saveDirty(name);
+  _itemOpQueue[name] = (_itemOpQueue[name] || []).concat(ops);
+  if (_itemOpTimer[name]) clearTimeout(_itemOpTimer[name]);
+  _itemOpTimer[name] = setTimeout(function() { _flushItemOps(name); }, 300);
+  _notifySyncChange();
+}
+function _flushItemSyncNow() { Object.keys(_itemOpQueue).forEach(function(n) { if (_itemOpTimer[n]) { clearTimeout(_itemOpTimer[n]); _itemOpTimer[n] = null; } _flushItemOps(n); }); }
+function _applyOpToTarget(target, ref, op) {
+  var FV = firebase.firestore.FieldValue, FP = firebase.firestore.FieldPath;
+  if (op.type === "set") {
+    // merge: 同じIDが既にあれば他端末の行を失わない。墓石（_deleted）があれば解除して復活
+    var d = Object.assign({}, _docForSet(op.doc), { _v: 2, _updatedAt: FV.serverTimestamp(), _updatedBy: _deviceId, _deleted: FV.delete(), _deletedAt: FV.delete() });
+    target.set(ref, d, { merge: true });
+  } else if (op.type === "update") {
+    var args = [];
+    Object.keys(op.fields).forEach(function(k) { args.push(new FP(k), op.fields[k]); });
+    op.rowOps.forEach(function(r) { args.push(new FP("rows", r.rid), r.value); });
+    args.push(new FP("_updatedAt"), FV.serverTimestamp(), new FP("_updatedBy"), _deviceId, new FP("_v"), 2);
+    target.update.apply(target, [ref].concat(args));
+  } else if (op.type === "tomb") {
+    target.set(ref, { _deleted: true, _deletedAt: FV.serverTimestamp(), _updatedAt: FV.serverTimestamp(), _updatedBy: _deviceId, _v: 2 }, { merge: true });
+  }
+}
+function _flushItemOps(name) {
+  var ops = _itemOpQueue[name] || [];
+  _itemOpQueue[name] = [];
+  if (!ops.length || !firebaseDB) return;
+  var st = _itemState[name];
+  var col = firebaseDB.collection(ITEM_DEFS[name].col);
+  // 同じIDへの連続操作は最後をまとめる（set の後の update は set に畳めないので順序維持でそのまま）
+  var groups = []; for (var i = 0; i < ops.length; i += 200) groups.push(ops.slice(i, i + 200));
+  groups.forEach(function(g) {
+    var batch = firebaseDB.batch();
+    var target = { set: function(r, d, o) { batch.set(r, d, o); }, update: function(r) { batch.update.apply(batch, Array.prototype.slice.call(arguments)); } };
+    var n = 0;
+    g.forEach(function(op) {
+      try { _applyOpToTarget(target, col.doc(op.id), op); n++; }
+      catch(e) { console.error("[ItemSync] 書き込み準備エラー", name, op, e); st.error = (e.message || String(e)); }
+    });
+    if (!n) return;
+    if (!st.pending) st.pendingSince = Date.now();
+    st.pending += n; st.sent += n;
+    _notifySyncChange();
+    batch.commit().then(function() {
+      st.pending = Math.max(0, st.pending - n); st.lastSend = new Date(); st.error = null;
+      g.forEach(function(op) { delete st.unacked[op.id]; });
+      _saveDirty(name);
+      _lastWriteInfo = name + " " + n + "件 @ " + st.lastSend.toLocaleTimeString("ja-JP");
+      _setSyncStatus(Object.keys(_blockedWrites).length ? "blocked" : "online");
+    }).catch(function(err) {
+      st.pending = Math.max(0, st.pending - n);
+      st.error = (err.code || "") + " " + (err.message || String(err));
+      _addDebug("❌ " + name + " 書き込みエラー: " + st.error);
+      console.error("[ItemSync] 書き込みエラー", name, err, g);
+      // 失敗分: 古い値を再送せず、lastSynced を失敗前に戻して「再送」で最新 state から差分を取り直す
+      g.forEach(function(op) {
+        if (op.prevLast === undefined) delete st.lastSynced[op.id]; else st.lastSynced[op.id] = op.prevLast;
+        st.failedIds[op.id] = 1;
+      });
+      _setSyncStatus("error");
     });
   });
-  var p = batch.commit();
-  // cases が大きい場合は別途チャンク書き込み
-  if (localData.cases && Array.isArray(localData.cases) && localData.cases.length > 200) {
-    p = p.then(function() { return _writeCasesChunked(localData.cases); });
+}
+function retryItemFailed(name) {
+  var st = _itemState[name];
+  var ids = Object.keys(st.failedIds);
+  if (!ids.length) return;
+  ids.forEach(function(k) { st.forceIds[k] = 1; delete st.failedIds[k]; });
+  st.error = null;
+  if (_itemReconcile[name]) _itemReconcile[name]([]);   // 再描画 → effect が最新 state から差分を送る
+}
+// 未送信件数。settledOnly=true のときは「4秒以上送れていない」分だけ数える（通常の送信中の一瞬を表示しないため）
+function itemSyncPendingCount(settledOnly) {
+  var n = 0; Object.keys(_itemState).forEach(function(k) {
+    var st = _itemState[k];
+    var stale = !settledOnly || !navigator.onLine || (st.pendingSince && Date.now() - st.pendingSince > 4000);
+    n += (stale ? st.pending : 0) + Object.keys(st.failedIds).length + (stale ? ((_itemOpQueue[k] || []).length) : 0);
+  });
+  return n;
+}
+// 保留変更の永続化: { d: 変更id[], x: 削除id[] }（旧形式の配列も読める）。未送信（サーバー未確認）の id も d に含める
+function _saveDirty(name) {
+  try {
+    var st = _itemState[name];
+    var d = {}; Object.keys(st.dirty).forEach(function(k) { d[k] = 1; }); Object.keys(st.unacked || {}).forEach(function(k) { d[k] = 1; });
+    localStorage.setItem("hokuyo_dirty_" + name, JSON.stringify({ d: Object.keys(d), x: Object.keys(st.dirtyDel) }));
+  } catch(e) {}
+}
+function _loadDirty(name) {
+  try {
+    var v = JSON.parse(localStorage.getItem("hokuyo_dirty_" + name) || "null");
+    var d = {}, x = {};
+    if (Array.isArray(v)) v.forEach(function(k) { d[k] = 1; });
+    else if (v) { (v.d || []).forEach(function(k) { d[k] = 1; }); (v.x || []).forEach(function(k) { x[k] = 1; }); }
+    return { dirty: d, dirtyDel: x };
+  } catch(e) { return { dirty: {}, dirtyDel: {} }; }
+}
+function clearLocalSyncState() {   // データリセット・復元・ファイル読込のとき（保留変更・保管分は新しいローカルデータと無関係になる）
+  Object.keys(ITEM_DEFS).forEach(function(n) { try { localStorage.removeItem("hokuyo_dirty_" + n); localStorage.removeItem("hokuyo_orphans_" + n); } catch(e) {} });
+}
+Object.keys(_itemState).forEach(function(n) { var l = _loadDirty(n); _itemState[n].dirty = l.dirty; _itemState[n].dirtyDel = l.dirtyDel; _itemState[n].unacked = {}; });
+
+// ─── 受信 ───
+function startItemListeners() {
+  if (!FIREBASE_ENABLED || !firebaseDB) return;
+  Object.keys(ITEM_DEFS).forEach(function(name) {
+    var st = _itemState[name];
+    if (st.unsub) { try { st.unsub(); } catch(e) {} }
+    st.gotFirst = false; st.ready = false; st.lastSynced = {}; st.serverSeen = false;
+    // includeMetadataChanges: キャッシュ→サーバー同期の切り替わり（fromCache=false）を受け取るため。docChanges() はデータ変更のみ
+    st.unsub = firebaseDB.collection(ITEM_DEFS[name].col).onSnapshot({ includeMetadataChanges: true }, function(snap) {
+      var upserts = [], deleted = [];
+      if (!snap.metadata.fromCache && !st.serverSeen) { st.serverSeen = true; _addDebug("サーバーと同期確認: " + name); }
+      snap.docChanges().forEach(function(ch) {
+        var d = ch.doc.data();
+        var id = (d.id !== undefined && d.id !== null) ? d.id : _numId(ch.doc.id);
+        var key = _idKey(id);
+        if (ch.type === "removed" || d._deleted) {
+          deleted.push(id); delete st.lastSynced[key];
+        } else {
+          d.id = id;
+          st.lastSynced[key] = _clean(d);
+          if (!st.ready && st.dirty[key]) {
+            // 突き合わせ前のローカル変更を失わないよう 3方向マージ（結果は「ローカル変更あり」のまま扱う）
+            var localItem = (Array.isArray(st.lastState) ? st.lastState : []).filter(function(x) { return x && _idKey(x.id) === key; })[0];
+            if (localItem) {
+              if (name === "cases") ensureRowIds(localItem, !st.base[key]);
+              var merged = _merge3(st.base[key] || null, _clean(itemToDoc(name, localItem)), st.lastSynced[key]);
+              upserts.push(_docToItemRaw(name, merged));
+              _addDebug("保留変更とマージ: " + name + " " + key);
+            } else upserts.push(docToItem(name, d));
+          } else upserts.push(docToItem(name, d));
+        }
+      });
+      st.count = Object.keys(st.lastSynced).length;   // 削除済み（墓石）を除いた件数
+      st.received += upserts.length + deleted.length;
+      st.lastReceive = new Date();
+      var first = !st.gotFirst;
+      if (first) { st.gotFirst = true; st.firstEmpty = snap.empty; _addDebug("受信(初回): " + name + " " + snap.size + "件" + (snap.metadata.fromCache ? "（キャッシュ）" : "")); }
+      if (upserts.length || deleted.length) {
+        if (!first) { _lastReceiveInfo = name + " " + (upserts.length + deleted.length) + "件 @ " + st.lastReceive.toLocaleTimeString("ja-JP"); }
+        if (_itemCallbacks[name]) _itemCallbacks[name](upserts, deleted, first);
+      }
+      if (st.serverSeen) _maybeItemReady(name);   // 突き合わせはサーバーの内容を見てから（キャッシュだけでは行わない）
+      _notifySyncChange();
+    }, function(err) {
+      st.error = (err.code || "") + " " + (err.message || String(err));
+      _addDebug("❌ " + name + " 受信エラー: " + st.error);
+      console.error("[ItemSync] リスナーエラー", name, err);
+      _setSyncStatus("error");
+      _scheduleListenerRestart(name + ": " + (err.code || "error"));
+    });
+  });
+  if (_metaUnsub) { try { _metaUnsub(); } catch(e) {} }
+  _metaUnsub = firebaseDB.collection(SYNC_COLLECTION).doc("meta").onSnapshot(function(snap) {
+    _metaState = snap.exists ? (snap.data() || {}) : {};
+    Object.keys(ITEM_DEFS).forEach(function(n) { _maybeItemReady(n); });
+    _notifySyncChange();
+  }, function(err) { _addDebug("meta 受信エラー: " + (err.code || err.message)); });
+}
+
+// 初回突き合わせ → 書き込み有効化。移行が未完了なら移行を開始
+function _maybeItemReady(name) {
+  var st = _itemState[name];
+  if (st.ready || !st.gotFirst || !st.serverSeen || _metaState === null) return;
+  var m = _metaState[name];
+  if (m && m.done) { _finishItemReady(name); return; }
+  // 完了印なし → 旧ドキュメントがあるか確認（あれば移行、無ければ新規プロジェクト扱い）
+  if (_legacyChecked[name] === undefined) {
+    _legacyChecked[name] = "checking";
+    firebaseDB.collection(SYNC_COLLECTION).doc(ITEM_DEFS[name].legacyDoc).get().then(function(s) {
+      _legacyChecked[name] = s.exists;
+      if (!s.exists) {
+        // 旧データ無し → そのまま有効化し完了印を付ける
+        firebaseDB.collection(SYNC_COLLECTION).doc("meta").set((function(){ var o = {}; o[name] = { done: true, count: 0, at: new Date().toISOString(), by: _deviceId, note: "legacy none" }; return o; })(), { merge: true }).catch(function(){});
+        _finishItemReady(name);
+      } else {
+        _startMigration(name);
+      }
+    }).catch(function(err) {
+      _legacyChecked[name] = undefined;
+      _addDebug("旧データ確認エラー(" + name + "): " + (err.code || err.message) + " — オンラインになったら再確認します");
+    });
+  } else if (_legacyChecked[name] === true && !st.migrating) {
+    _startMigration(name);
   }
-  return p;
+}
+function _finishItemReady(name) {
+  var st = _itemState[name];
+  if (st.ready) return;
+  st.ready = true;
+  var dirty = Object.keys(st.dirty);
+  var dirtyDel = Object.keys(st.dirtyDel);
+  st.dirty = {}; st.dirtyDel = {}; st.base = {}; _saveDirty(name);
+  var dirtySet = {}; dirty.forEach(function(k) { dirtySet[k] = 1; st.forceIds[k] = 1; });
+  // ローカルの現状とサーバーを突き合わせ
+  var local = Array.isArray(st.lastState) ? st.lastState : [];
+  var localIds = {};
+  var orphans = [];
+  local.forEach(function(x) {
+    if (!x || x.id === undefined || x.id === null) return;
+    var k = _idKey(x.id); localIds[k] = 1;
+    if (!st.lastSynced[k] && !dirtySet[k]) orphans.push(x);   // サーバーに無く、この端末で変更もしていない → 古い残り
+  });
+  // 書き込み有効化前にこの端末で明示的に削除したもの → 墓石（dirty からは推測しない）
+  var tombs = [];
+  dirtyDel.forEach(function(k) { if (!localIds[k] && st.lastSynced[k]) { delete st.lastSynced[k]; tombs.push({ type: "tomb", id: k }); } });
+  if (tombs.length) _enqueueItemOps(name, tombs);
+  if (orphans.length) saveOrphans(name, orphans);
+  // state を更新（孤立分を外す／配列を作り直す）→ React の effect が最新 state で forceIds を差分送信する
+  try { if (_itemReconcile[name]) _itemReconcile[name](orphans.map(function(x) { return x.id; })); } catch(e) { console.error(e); }
+  _addDebug("✅ " + name + " 同期開始（サーバー" + Object.keys(st.lastSynced).length + "件・保留変更" + dirty.length + "件・この端末だけ" + orphans.length + "件）");
+  _setSyncStatus(Object.keys(_blockedWrites).length ? "blocked" : "online");
+}
+
+// ─── 移行: 旧 clinicData/<cases|horses>（一括ドキュメント）→ 新コレクション ───
+function _loadLegacyItems(name) {
+  var ref = firebaseDB.collection(SYNC_COLLECTION).doc(ITEM_DEFS[name].legacyDoc);
+  return ref.get().then(function(s) {
+    if (!s.exists) return [];
+    var d = s.data();
+    if (d.chunked) {
+      var ps = []; for (var i = 0; i < d.totalChunks; i++) ps.push(firebaseDB.collection(SYNC_COLLECTION).doc(ITEM_DEFS[name].legacyDoc + "_chunk_" + i).get());
+      return Promise.all(ps).then(function(snaps) { var all = []; snaps.forEach(function(x) { if (x.exists && x.data().data) all = all.concat(x.data().data); }); return all; });
+    }
+    return Array.isArray(d.data) ? d.data : [];
+  });
+}
+function _startMigration(name) {
+  var st = _itemState[name];
+  if (st.migrating) return;
+  if (!navigator.onLine) { _addDebug("移行待ち(" + name + "): オフライン"); return; }
+  st.migrating = { done: 0, total: 0, phase: "claim" };
+  _notifySyncChange();
+  var metaRef = firebaseDB.collection(SYNC_COLLECTION).doc("meta");
+  // 1台だけが移行するよう claim（15分で失効）
+  firebaseDB.runTransaction(function(tx) {
+    return tx.get(metaRef).then(function(s) {
+      var m = s.exists ? (s.data() || {}) : {};
+      if (m[name] && m[name].done) throw { code: "already-done" };
+      var c = m["claim_" + name];
+      if (c && c.by !== _deviceId && Date.now() - new Date(c.at).getTime() < 15 * 60 * 1000) throw { code: "claimed-by-other", by: c.by };
+      var upd = {}; upd["claim_" + name] = { by: _deviceId, at: new Date().toISOString() };
+      tx.set(metaRef, upd, { merge: true });
+    });
+  }).then(function() {
+    st.migrating.phase = "load";
+    _addDebug("移行開始(" + name + "): 旧データを読み込み中");
+    return _loadLegacyItems(name);
+  }).then(function(items) {
+    st.migrating.total = items.length; st.migrating.phase = "write";
+    var seen = {};
+    var uniq = items.filter(function(x) { if (!x || x.id === undefined || x.id === null) return false; var k = _idKey(x.id); if (seen[k]) return false; seen[k] = 1; return true; });
+    var col = firebaseDB.collection(ITEM_DEFS[name].col);
+    var FV = firebase.firestore.FieldValue;
+    var chain = Promise.resolve();
+    for (var i = 0; i < uniq.length; i += 250) {
+      (function(slice) {
+        chain = chain.then(function() {
+          var batch = firebaseDB.batch();
+          slice.forEach(function(item) {
+            if (name === "cases") ensureRowIds(item, true);
+            var doc = _docForSet(_clean(itemToDoc(name, item)));
+            doc._v = 2; doc._updatedAt = FV.serverTimestamp(); doc._updatedBy = _deviceId; doc._migrated = true;
+            batch.set(col.doc(_idKey(item.id)), doc, { merge: true });
+          });
+          return batch.commit().then(function() { st.migrating.done += slice.length; _notifySyncChange(); });
+        });
+      })(uniq.slice(i, i + 250));
+    }
+    return chain.then(function() { return uniq.length; });
+  }).then(function(count) {
+    var upd = {}; upd[name] = { done: true, count: count, at: new Date().toISOString(), by: _deviceId };
+    return metaRef.set(upd, { merge: true }).then(function() {
+      st.migrating.phase = "done";
+      _addDebug("✅ 移行完了(" + name + "): " + count + "件");
+    });
+  }).catch(function(err) {
+    if (err && err.code === "already-done") { st.migrating = null; _addDebug("移行は完了済み(" + name + ")"); return; }
+    if (err && err.code === "claimed-by-other") {
+      st.migrating = null; _legacyChecked[name] = "deferred";
+      _addDebug("別の端末が移行中(" + name + "): " + String(err.by).substr(-6) + " — 完了を待ちます");
+      setTimeout(function() { if (_legacyChecked[name] === "deferred") { _legacyChecked[name] = true; _maybeItemReady(name); } }, 5 * 60 * 1000);   // 相手が止まった場合は5分後に再確認
+      return;
+    }
+    st.migrating = null;
+    st.error = "移行エラー: " + (err && (err.message || err.code) || String(err));
+    _addDebug("❌ " + st.error);
+    console.error("[ItemSync] 移行エラー", name, err);
+    _setSyncStatus("error");
+  });
+}
+
+// バックアップ復元などで、配列の全件をサーバーへ強制反映（削除済みも復活する・明示操作専用）
+function forcePushItems(name, items) {
+  if (!FIREBASE_ENABLED || !firebaseDB) return Promise.resolve(0);
+  var col = firebaseDB.collection(ITEM_DEFS[name].col);
+  var FV = firebase.firestore.FieldValue;
+  var st = _itemState[name];
+  var list = (items || []).filter(function(x) { return x && x.id !== undefined && x.id !== null; });
+  var chain = Promise.resolve();
+  for (var i = 0; i < list.length; i += 250) {
+    (function(slice) {
+      chain = chain.then(function() {
+        var batch = firebaseDB.batch();
+        slice.forEach(function(item) {
+          if (name === "cases") ensureRowIds(item, !st.lastSynced[_idKey(item.id)]);
+          var doc = _docForSet(_clean(itemToDoc(name, item)));
+          doc._v = 2; doc._updatedAt = FV.serverTimestamp(); doc._updatedBy = _deviceId; doc._deleted = FV.delete(); doc._deletedAt = FV.delete();
+          batch.set(col.doc(_idKey(item.id)), doc, { merge: true });
+        });
+        return batch.commit();
+      });
+    })(list.slice(i, i + 250));
+  }
+  return chain.then(function() { return list.length; });
+}
+
+// ─── この端末だけにあるデータ（突き合わせで外したもの）の保管 ───
+function saveOrphans(name, items) {
+  if (!items || !items.length) return;
+  try {
+    var key = "hokuyo_orphans_" + name;
+    var cur = JSON.parse(localStorage.getItem(key) || "[]");
+    var ids = {}; cur.forEach(function(x) { ids[_idKey(x.item.id)] = 1; });
+    items.forEach(function(it) { if (!ids[_idKey(it.id)]) cur.push({ at: new Date().toISOString(), item: it }); });
+    if (cur.length > 300) cur = cur.slice(cur.length - 300);
+    localStorage.setItem(key, JSON.stringify(cur));
+  } catch(e) { console.error("orphans 保存失敗", e); }
+}
+function getOrphans(name) { try { return JSON.parse(localStorage.getItem("hokuyo_orphans_" + name) || "[]"); } catch(e) { return []; } }
+function removeOrphan(name, id) {
+  try { var key = "hokuyo_orphans_" + name; var cur = JSON.parse(localStorage.getItem(key) || "[]").filter(function(x) { return _idKey(x.item.id) !== _idKey(id); }); localStorage.setItem(key, JSON.stringify(cur)); } catch(e) {}
+}
+function clearOrphans(name) { try { localStorage.removeItem("hokuyo_orphans_" + name); } catch(e) {} }
+
+function getItemSyncReport() {
+  var out = {};
+  Object.keys(_itemState).forEach(function(n) {
+    var st = _itemState[n];
+    out[n] = { ready: st.ready, gotFirst: st.gotFirst, count: st.count, pending: st.pending + ((_itemOpQueue[n] || []).length), pendingStale: (!navigator.onLine || (st.pendingSince && Date.now() - st.pendingSince > 4000)) ? st.pending + ((_itemOpQueue[n] || []).length) : 0, failed: Object.keys(st.failedIds).length,
+      sent: st.sent, received: st.received, lastReceive: st.lastReceive, lastSend: st.lastSend, error: st.error, migrating: st.migrating,
+      dirty: Object.keys(st.dirty).length, orphans: getOrphans(n).length,
+      migrated: !!(_metaState && _metaState[n] && _metaState[n].done), metaKnown: _metaState !== null };
+  });
+  return out;
 }
 
 // ─── ネットワーク状態監視 ───
 if (typeof window !== "undefined") {
   window.addEventListener("online", function() {
-    if (FIREBASE_ENABLED) _setSyncStatus("online");
+    if (FIREBASE_ENABLED) { _setSyncStatus("online"); Object.keys(ITEM_DEFS).forEach(function(n) { _maybeItemReady(n); }); }
   });
   window.addEventListener("offline", function() {
     _setSyncStatus("offline");
@@ -1635,7 +1981,7 @@ function NewHorseModal({
         return;
       }
       onSave({
-        id: Date.now(),
+        id: newRecordId(),
         name,
         farmId: Number(farmId),
         breed,
@@ -1735,7 +2081,7 @@ function NewFarmModal({
         return;
       }
       onSave({
-        id: Date.now(),
+        id: newRecordId(),
         name,
         owner,
         phone,
@@ -1982,7 +2328,7 @@ function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, o
     if (selIds.length === 0) { alert("馬を選んでください"); return; }
     if (!diagnosis) { alert("病名を入力してください（例: 予防接種、駆虫）"); return; }
     if (!confirm(farm.name + " の " + selIds.length + " 頭に「" + diagnosis + "」のカルテを作成します（1頭 ¥" + perHorse.toLocaleString() + "、合計 ¥" + total.toLocaleString() + "）。よろしいですか？")) return;
-    const base = Date.now();
+    const base = newRecordId();
     const drugs = drugRows.filter(r => r.drugId).map(r => { const d = drugsMaster.find(x => x.id === Number(r.drugId)); return { drugId: Number(r.drugId), dose: Number(r.dose) || 0, memo: r.memo || "", useRx: !!r.useRx, fee: calcDrugLine(d, r.dose, r.useRx), unitPrice: drugUnitPrice(d, r.useRx), unit: r.useRx && d ? (d.packUnit || d.unit) : (d ? d.unit : "") }; });
     const newCases = selIds.map((hid, i) => ({
       id: base + i,
@@ -1995,7 +2341,7 @@ function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, o
       vet: currentVet || "佐藤",
       batchId: "batch_" + base,
       visits: [{
-        date: visitDate, visitType, visitFee,
+        date: visitDate, visitType, visitFee, vet: currentVet || "佐藤",
         symptoms: [], vitals: {t: "", p: "", r: ""}, history: "", clinicalExam: "",
         treatments: selTreat.map(t => Object.assign({}, t)),
         drugs: drugs.map(d => Object.assign({}, d)),
@@ -2981,7 +3327,7 @@ function HorseSearchSelect({horses, farms, cases, value, onChange, disabled, onA
         return;
       }
       newFarm = {
-        id: Date.now(),
+        id: newRecordId(),
         name: newFarmName,
         owner: "",
         phone: "",
@@ -2995,7 +3341,7 @@ function HorseSearchSelect({horses, farms, cases, value, onChange, disabled, onA
     }
 
     const newHorse = {
-      id: Date.now(),
+      id: newRecordId(),
       name: newHorseName,
       farmId: farmId,
       breed: "サラブレッド",
@@ -3176,9 +3522,12 @@ function GeneralKartePage({
   onUpdateHorse,
   lastAddedHorseId,
   preSelectedFarmName,
-  currentVet
+  currentVet,
+  vets
 }) {
   const isNew = !kase;
+  const vetOptions = (vets && vets.length ? vets : ["佐藤", "關"]);
+  const [visitVet, setVisitVet] = useState(currentVet || "佐藤");   // この来院行の担当獣医師
   const [selectedHorse, setSelectedHorse] = useState(kase ? String(kase.horseId) : "");
   const [unlockHorse, setUnlockHorse] = useState(false); // 既存カルテの馬を変更するときに解除
   const [showFarmChange, setShowFarmChange] = useState(false);
@@ -3200,6 +3549,7 @@ function GeneralKartePage({
   const loadVisit = (v, idx) => {
     setEditVisitIdx(idx);
     setVisitDate(v.date || "");
+    setVisitVet(v.vet || kase?.vet || currentVet || "佐藤");
     setVisitType(v.visitType || "");
     setSymptoms(v.symptoms || []);
     setVitals(v.vitals || {t:"",p:"",r:""});
@@ -3214,6 +3564,7 @@ function GeneralKartePage({
   const cancelEdit = () => {
     setEditVisitIdx(-1);
     setVisitDate(todayJST());
+    setVisitVet(currentVet || "佐藤");
     setVisitType("");
     setSymptoms([]);
     setVitals({t:"",p:"",r:""});
@@ -3275,6 +3626,7 @@ function GeneralKartePage({
     const hasTreatData = selTreatments.length > 0 || drugRows.some(r => r.drugId) || symptoms.length > 0 || vitals.t || vitals.p || vitals.r || history || clinicalExam || vehicleKm;
     const firstVisit = hasTreatData ? [{
       date: visitDate,
+      vet: visitVet || currentVet || "佐藤",
       visitType,
       visitFee,
       symptoms: [...symptoms],
@@ -3289,20 +3641,24 @@ function GeneralKartePage({
     }] : [];
     showToast("✓ カルテを作成しました　" + (horse ? horse.name : "") + "　" + diagnosis + (hasTreatData ? "　¥" + currentTotal.toLocaleString() : ""));
     onSave({
-      id: Date.now(),
+      id: newRecordId(),
       type: "\u4E00\u822C",
       horseId: Number(selectedHorse),
       farmId: horse ? horse.farmId : null,
       diagnosis,
       caseStatus: caseStatus,
       openDate: visitDate,
-      vet: currentVet || "\u4F50\u85E4",
+      vet: visitVet || currentVet || "\u4F50\u85E4",
       visits: firstVisit
     });
   };
   // 診療を追加保存
   const handleSaveVisit = () => {
+    const editing = editVisitIdx >= 0 ? pastVisits[editVisitIdx] : null;
     const nv = {
+      rid: editing ? editing.rid : undefined,           // 既存行は同じ行IDを保つ（他端末と行単位で突き合わせるため）
+      seq: editing ? editing.seq : undefined,
+      vet: visitVet || currentVet || "佐藤",
       date: visitDate,
       visitType,
       visitFee,
@@ -3331,8 +3687,8 @@ function GeneralKartePage({
       updatedVisits = [...pastVisits, nv];
     }
     showToast("✓ 保存しました　" + (horse ? horse.name : "") + "　" + visitDate + " " + (visitType || "") + "　¥" + currentTotal.toLocaleString() + (editVisitIdx >= 0 ? "（更新）" : ""));
-    onSave({
-      id: kase?.id || Date.now(),
+    onSave(Object.assign({}, kase || {}, {     // kase の他の項目（draft・memoId・closedAt 等）を落とさない
+      id: kase?.id || newRecordId(),
       type: "\u4E00\u822C",
       horseId: Number(selectedHorse),
       farmId: horse?.farmId || kase?.farmId,
@@ -3341,10 +3697,11 @@ function GeneralKartePage({
       openDate: kase?.openDate || visitDate,
       vet: kase?.vet || currentVet || "\u4F50\u85E4",
       visits: updatedVisits
-    });
+    }));
     // フォームをリセット（ページは移動しない → 右サイドバーに保存される）
     setEditVisitIdx(-1);
     setVisitDate(todayJST());
+    setVisitVet(currentVet || "佐藤");
     setVisitType("");
     setSymptoms([]);
     setVitals({t:"",p:"",r:""});
@@ -3372,11 +3729,13 @@ function GeneralKartePage({
     if (!kase) return;
     if (!confirm("\u3053\u306E\u8A3A\u7642\u5C65\u6B74\u3092\u524A\u9664\u3057\u307E\u3059\u304B\uFF1F\n\u203B\u524A\u9664\u3059\u308B\u3068\u5143\u306B\u623B\u305B\u307E\u305B\u3093")) return;
     const updatedVisits = pastVisits.filter((_, i) => i !== idx);
+    const delRid = pastVisits[idx] && pastVisits[idx].rid;
     if (editVisitIdx === idx) { cancelEdit(); }
     else if (editVisitIdx > idx) { setEditVisitIdx(editVisitIdx - 1); }
     onSave({
       ...kase,
-      visits: updatedVisits
+      visits: updatedVisits,
+      _delRids: delRid ? [delRid] : []    // 同期: この行は意図して削除（他端末追加分と区別）
     });
   };
 
@@ -3400,7 +3759,7 @@ function GeneralKartePage({
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3}
-    }, /*#__PURE__*/React.createElement("strong", {style:{fontSize:11}}, v.date, " ", v.visitType ? `(${v.visitType})` : ""), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("strong", {style:{fontSize:11}}, v.date, " ", v.visitType ? `(${v.visitType})` : "", (v.vet || kase?.vet) ? /*#__PURE__*/React.createElement("span", {style:{marginLeft:4, fontSize:9, fontWeight:600, padding:"0 5px", borderRadius:8, background: (v.vet || kase?.vet) === "佐藤" ? "#dbeafe" : "#dcfce7", color: (v.vet || kase?.vet) === "佐藤" ? "#1e40af" : "#166534"}}, v.vet || kase?.vet) : null), /*#__PURE__*/React.createElement("span", {
       style: {color:"#166534", fontWeight:600, fontSize:11}
     }, "\xA5", vt.toLocaleString())), /*#__PURE__*/React.createElement("div", {style:{color:"#6b7280", marginBottom:2}},
       v.treatments?.map(t => t.name).join("\u3001") || "", v.drugs?.length > 0 ? " / " + v.drugs.map(r => {
@@ -3736,7 +4095,14 @@ function GeneralKartePage({
       fontSize: 11,
       padding: "4px 10px"
     } : {fontSize: 11, padding: "4px 10px"}
-  }, o.k || "\u306A\u3057", o.fee > 0 ? ` \xA5${o.fee.toLocaleString()}` : "")))), /*#__PURE__*/React.createElement("div", {style:{gridColumn:"1 / -1", marginTop: 4}}, /*#__PURE__*/React.createElement("label", {
+  }, o.k || "\u306A\u3057", o.fee > 0 ? ` \xA5${o.fee.toLocaleString()}` : "")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "lbl"
+  }, "\u62C5\u5F53\u7363\u533B\u5E2B"), /*#__PURE__*/React.createElement("div", {style:{display:"flex", gap:4}}, vetOptions.map(vn => /*#__PURE__*/React.createElement("button", {
+    key: vn,
+    onClick: () => setVisitVet(vn),
+    className: `tab-btn ${visitVet === vn ? "active" : ""}`,
+    style: visitVet === vn ? {background: vn === "\u4F50\u85E4" ? "#1d4ed8" : "#15803d", color: "#fff", fontSize: 11, padding: "4px 10px"} : {fontSize: 11, padding: "4px 10px"}
+  }, vn)))), /*#__PURE__*/React.createElement("div", {style:{gridColumn:"1 / -1", marginTop: 4}}, /*#__PURE__*/React.createElement("label", {
     className: "check-item",
     style: {
       padding: "8px 12px", borderRadius: 8, cursor: "pointer",
@@ -5215,8 +5581,11 @@ function BreedingInputPage({
   onAddHorse,
   onAddFarm,
   lastAddedHorseId,
-  currentVet
+  currentVet,
+  vets
 }) {
+  const vetOptions = (vets && vets.length ? vets : ["佐藤", "關"]);
+  const delRidsRef = useRef([]);   // この画面で削除した所見行の rid（保存時に親へ渡す）
   const [selectedHorse, setSelectedHorse] = useState(kase ? String(kase.horseId) : "");
   const [unlockHorse, setUnlockHorse] = useState(false); // 既存カルテの馬を変更するときに解除
   const [filterFarm, setFilterFarm] = useState(() => {
@@ -5265,6 +5634,13 @@ function BreedingInputPage({
     vehicleKm: f.vehicleKm || "",
     adjustFee: f.adjustFee || ""
     };
+    // 同期用の行ID・順序・担当獣医師、FM取込の確定金額はそのまま引き継ぐ
+    if (f.rid) result.rid = f.rid;
+    if (f.seq !== undefined && f.seq !== null) result.seq = f.seq;
+    if (f.vet) result.vet = f.vet;
+    if (f.totalFee !== undefined && f.totalFee !== null && f.totalFee !== "") result.totalFee = f.totalFee;
+    if (f.draft) result.draft = true;          // AI下書きの経過行は、開いただけでは確定しない（請求除外のまま）
+    if (f.memoId) result.memoId = f.memoId;
     return result;
   };
   const [findings, setFindings] = useState(() => {
@@ -5282,7 +5658,7 @@ function BreedingInputPage({
   const dupCase = (!kase && selectedHorse) ? cases.find(c => c.type === "繁殖" && !c.archived && Number(c.horseId) === Number(selectedHorse) && breedingSeasonOf(c) === thisSeason) : null;
   const foalDue = prevInfo && prevInfo.result === "受胎" && prevInfo.insDate ? addDaysStr(prevInfo.insDate, 340) : "";
   const addF = () => setFindings(p => {
-    const newF = normalizeFinding({date: todayJST()});
+    const newF = normalizeFinding({date: todayJST(), vet: currentVet || "佐藤"});
     // 新規行を一番上（最新日付順の先頭）に追加
     return [newF, ...p].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   });
@@ -5449,13 +5825,14 @@ function BreedingInputPage({
   // 次の種付けまたはPGでリセットされる
 
   // Auto-save: whenever any state changes, save to parent immediately (debounced 500ms)
-  const caseIdRef = useRef(kase?.id || Date.now());
+  const caseIdRef = useRef(kase?.id || newRecordId());
   const [saveStatus, setSaveStatus] = useState("");
   useEffect(() => {
     if (!selectedHorse) return; // don't save if no horse selected
     const timer = setTimeout(() => {
-      const updated = {
+      const updated = Object.assign({}, kase || {}, {     // kase の他の項目（archived・carryoverFrom・draft 等）を落とさない
         id: caseIdRef.current,
+        _delRids: delRidsRef.current.slice(),
         type: "繁殖",
         horseId: Number(selectedHorse),
         farmId: horse?.farmId || kase?.farmId || null,
@@ -5474,8 +5851,9 @@ function BreedingInputPage({
         breedingNote: note,
         scheduledExam,
         findings
-      };
+      });
       if (onSave) onSave(updated);
+      delRidsRef.current = [];
       setSaveStatus("保存済");
       const t2 = setTimeout(() => setSaveStatus(""), 2000);
       return () => clearTimeout(t2);
@@ -5707,7 +6085,13 @@ function BreedingInputPage({
         fontSize: 13,
         minHeight: "44px"
       }
-    })), tags.length > 0 && /*#__PURE__*/React.createElement("div", {
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      style: { fontSize: 10, color: "#6b7280" }
+    }, "\u62C5\u5F53"), /*#__PURE__*/React.createElement("select", {
+      value: f.vet || kase?.vet || currentVet || "佐藤",
+      onChange: e => upF(i, "vet", e.target.value),
+      style: { display: "block", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, minHeight: "44px", background: "#fff" }
+    }, vetOptions.map(vn => /*#__PURE__*/React.createElement("option", { key: vn, value: vn }, vn)))), tags.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: { display: "flex", gap: 4, flexWrap: "wrap" }
     }, tags.map((t, ti) => /*#__PURE__*/React.createElement("span", {
       key: ti,
@@ -5758,7 +6142,7 @@ function BreedingInputPage({
         fontSize: 12
       }
     })), findings.length > 1 && /*#__PURE__*/React.createElement("button", {
-      onClick: () => setFindings(p => p.filter((_, idx) => idx !== i)),
+      onClick: () => { if (f.rid) delRidsRef.current.push(f.rid); setFindings(p => p.filter((_, idx) => idx !== i)); },
       style: {
         color: "#ef4444",
         background: "none",
@@ -10160,7 +10544,7 @@ function PharmaInputPage({
   });
   var sortedHorses = horses.slice().filter(function(h){return !h.archived}).sort(function(a,b){ return (horseUsage[b.id]||0) - (horseUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
   var sortedFarms = farms.slice().filter(function(f){return !f.archived}).sort(function(a,b){ return (farmUsage[b.id]||0) - (farmUsage[a.id]||0) || a.name.localeCompare(b.name,"ja"); });
-  const caseIdRef = useRef(kase?.id || Date.now());
+  const caseIdRef = useRef(kase?.id || newRecordId());
   const [openDate, setOpenDate] = useState(kase?.openDate || todayJST());
   const [useHorse, setUseHorse] = useState(kase?.horseId ? true : false);
   const [selectedHorse, setSelectedHorse] = useState(kase ? String(kase.horseId) : "");
@@ -10211,7 +10595,7 @@ function PharmaInputPage({
     const timer = setTimeout(() => {
       const target = useHorse ? selectedHorse : "any";
       if (!target && useHorse) return;
-      const updated = {
+      const updated = Object.assign({}, kase || {}, {
         id: caseIdRef.current,
         type: "薬事",
         openDate,
@@ -10227,7 +10611,7 @@ function PharmaInputPage({
           memo: r.memo,
           price: r.price
         })).concat(vehicleFee > 0 ? [{ drugId: VEHICLE_DRUG_ID, dose: Number(vehicleKm), memo: "", price: vehicleFee }] : [])
-      };
+      });
       if (onSave) onSave(updated);
       setSaveStatus("保存済");
       const t2 = setTimeout(() => setSaveStatus(""), 2000);
@@ -11258,53 +11642,102 @@ function IntegritySection({ horses, farms, cases, setHorses, setCases }) {
         })))));
 }
 
-// ═══════════════ 同期パネル（未送信データの可視化・手動書き込み） ═══════════════
+// ═══════════════ 同期パネル（v2: カルテ・馬は1件ずつ同期／その他は項目ごと） ═══════════════
 function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases }) {
   const E = React.createElement;
   const [, force] = useState(0);
+  const [showLog, setShowLog] = useState(false);
   React.useEffect(() => { const t = setInterval(() => force(x => x + 1), 2000); return () => clearInterval(t); }, []);
   const r = getSyncReport();
   const fmt = d => d ? d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
   const blockedCount = r.rows.filter(x => x.blocked).length;
   const failedCount = r.rows.filter(x => x.failed).length;
-  const queuedCount = r.rows.filter(x => x.queued).length;
   const notReceived = r.rows.filter(x => !x.received).map(x => x.doc);
-  const forceLeft = Math.max(0, Math.round((r.forceUntil - Date.now()) / 1000));
   const th = t => E("th", { style: { textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b7280", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" } }, t);
   const td = (t, style) => E("td", { style: Object.assign({ padding: "6px 8px", fontSize: 12, borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }, style || {}) }, t);
   const statusLabel = { online: "☁️ 同期中", syncing: "🔄 初回ロード中", offline: "📴 オフライン", error: "⚠️ エラー", blocked: "⛔ 保留あり", local: "💾 ローカル" }[r.status] || r.status;
+  const items = r.items || {};
+  const itemLabel = { cases: "カルテ", horses: "馬" };
+  const pendingTotal = Object.keys(items).reduce((s, k) => s + (items[k].pending || 0), 0);
+  const failedTotal = Object.keys(items).reduce((s, k) => s + (items[k].failed || 0), 0);
+  const orphanTotal = Object.keys(items).reduce((s, k) => s + (items[k].orphans || 0), 0);
+  const migrating = Object.keys(items).filter(k => items[k].migrating && items[k].migrating.phase !== "done");
+  const notReady = Object.keys(items).filter(k => !items[k].ready);
+  const localCount = { cases: (cases || []).length, horses: (horses || []).length };
+  const orphanRows = (name) => getOrphans(name).map(o => {
+    const it = o.item || {};
+    const h = name === "cases" ? (horses || []).find(x => x.id === it.horseId) : null;
+    const label = name === "cases" ? ((it.type || "") + "　" + (h ? h.name : "馬ID " + it.horseId) + "　" + (it.openDate || "") + "　" + (it.diagnosis || "")) : ((it.name || "") + "　" + ((farms || []).find(f => f.id === it.farmId) || {}).name || "");
+    return E("div", { key: String(it.id), style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f3f4f6", fontSize: 12 } },
+      E("span", { style: { flex: 1 } }, label, E("span", { style: { color: "#9ca3af", marginLeft: 6, fontSize: 10 } }, "保管 " + (o.at || "").slice(0, 16).replace("T", " "))),
+      E("button", { className: "btn btn-primary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => {
+        if (!confirm("この" + itemLabel[name] + "をクラウドへ復元します（同じIDが他端末で削除されていた場合も復活します）。よろしいですか？")) return;
+        forcePushItems(name, [it]).then(() => { removeOrphan(name, it.id); (name === "cases" ? setCases : setHorses)(prev => prev.some(x => String(x.id) === String(it.id)) ? prev : prev.concat([it])); force(x => x + 1); })
+          .catch(e => alert("復元エラー: " + (e.message || e)));
+      } }, "クラウドへ復元"),
+      E("button", { className: "btn btn-secondary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => { if (confirm("この端末の保管分から削除します。よろしいですか？")) { removeOrphan(name, it.id); force(x => x + 1); } } }, "破棄"));
+  });
   return E("div", { className: "modal-overlay", onClick: onClose },
-    E("div", { className: "modal", onClick: e => e.stopPropagation(), style: { width: 760, maxWidth: "96vw" } },
+    E("div", { className: "modal", onClick: e => e.stopPropagation(), style: { width: 800, maxWidth: "96vw" } },
       E("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } },
-        E("h2", { style: { fontSize: 18, fontWeight: 700 } }, "☁️ Firebase 同期状況"),
+        E("h2", { style: { fontSize: 18, fontWeight: 700 } }, "☁️ 同期状況"),
         E("button", { className: "btn btn-secondary btn-sm", onClick: onClose }, "閉じる")),
       // サマリー
       E("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 } },
-        [["状態", statusLabel], ["書き込み許可", r.writeEnabled ? "有効" : "初回ロード待ち"],
-         ["ログイン", r.user || "未ログイン"], ["端末ID", r.deviceId.substr(-10)]].map(([k, v]) =>
+        [["状態", r.online ? statusLabel : "📴 オフライン（入力は端末に保持）"], ["未送信", pendingTotal ? pendingTotal + " 件（復帰時に自動送信）" : "なし"],
+         ["ログイン", r.user || "未ログイン"], ["端末", r.deviceId.substr(-6) + "（番号 " + _deviceSlot + "）"]].map(([k, v]) =>
           E("div", { key: k, style: { background: "#f9fafb", borderRadius: 8, padding: "8px 10px" } },
             E("div", { style: { fontSize: 10, color: "#6b7280" } }, k),
             E("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis" } }, v)))),
       // 警告
-      (blockedCount + failedCount + notReceived.length) > 0 && E("div", { style: { background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#78350f", lineHeight: 1.6 } },
-        blockedCount > 0 && E("div", null, "⛔ 上書き保護により " + blockedCount + " 項目の書き込みが保留中です。内容を確認して「今すぐ書き込む」か「Firebaseの内容に戻す」を選んでください。"),
-        failedCount > 0 && E("div", null, "❌ " + failedCount + " 項目の送信がエラーになっています。通信を確認して「再送」してください。"),
-        notReceived.length > 0 && E("div", null, "📡 未受信の項目: " + notReceived.join(", ") + "（この端末はまだFirebaseの最新データを受け取れていません。「再接続」を試してください）")),
-      forceLeft > 0 && E("div", { style: { background: "#dcfce7", border: "1px solid #22c55e", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#14532d" } },
-        "✅ 手動書き込み許可中 — 残り " + forceLeft + " 秒は上書き保護をバイパスします"),
+      (migrating.length > 0) && E("div", { style: { background: "#dbeafe", border: "1px solid #3b82f6", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#1e3a8a", lineHeight: 1.6 } },
+        migrating.map(k => E("div", { key: k }, "🔄 " + itemLabel[k] + "を新しい保存方式へ移行中… " + (items[k].migrating.phase === "write" ? items[k].migrating.done + " / " + items[k].migrating.total + " 件" : items[k].migrating.phase === "load" ? "旧データ読み込み中" : "準備中") + "（この画面を閉じずにお待ちください）"))),
+      (notReady.length > 0 && migrating.length === 0) && E("div", { style: { background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#78350f", lineHeight: 1.6 } },
+        "⏳ " + notReady.map(k => itemLabel[k]).join("・") + " はまだクラウドとの初回突き合わせが終わっていません" + (!r.online ? "（オフライン）" : items[notReady[0]].metaKnown ? "" : "（移行状況の確認待ち）") + "。この間の入力は端末に保持され、突き合わせ後に自動送信されます。"),
+      r.persistence === false && E("div", { style: { background: "#fee2e2", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 } },
+        "⚠️ オフライン保存が無効です（" + r.persistenceError + "）。電子カルテを複数タブで開いている場合は他のタブを閉じて再読み込みしてください。この状態でオフライン入力するとブラウザを閉じたときに失われます。"),
+      (failedTotal + blockedCount + failedCount + notReceived.length) > 0 && E("div", { style: { background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#78350f", lineHeight: 1.6 } },
+        failedTotal > 0 && E("div", null, "❌ カルテ・馬の送信 " + failedTotal + " 件がエラーになっています。" + Object.keys(items).map(k => items[k].error ? "（" + itemLabel[k] + ": " + items[k].error + "）" : "").join("") + " 「再送」を試してください。permission-denied の場合は Firestore ルールに cases / horses コレクションの許可が必要です。"),
+        blockedCount > 0 && E("div", null, "⛔ 上書き保護により " + blockedCount + " 項目（マスタ等）の書き込みが保留中です。"),
+        failedCount > 0 && E("div", null, "❌ " + failedCount + " 項目（マスタ等）の送信がエラーになっています。"),
+        notReceived.length > 0 && E("div", null, "📡 未受信の項目: " + notReceived.join(", "))),
+      // カルテ・馬（v2）
+      E("div", { style: { fontWeight: 700, fontSize: 13, margin: "4px 0 6px" } }, "カルテ・馬（1件ずつ同期）"),
+      E("div", { style: { overflowX: "auto", marginBottom: 12 } },
+        E("table", { style: { width: "100%", borderCollapse: "collapse" } },
+          E("thead", null, E("tr", null, th("項目"), th("この端末"), th("クラウド"), th("状態"), th("未送信"), th("最終送信"), th("最終受信"), th(""))),
+          E("tbody", null, Object.keys(items).map(k => {
+            const it = items[k];
+            let st = "✅ 同期中", color = "#16a34a";
+            if (it.error) { st = "❌ " + it.error; color = "#dc2626"; }
+            else if (it.migrating && it.migrating.phase !== "done") { st = "🔄 移行中"; color = "#2563eb"; }
+            else if (!it.gotFirst) { st = "📡 未受信"; color = "#b45309"; }
+            else if (!it.ready) { st = "⏳ 突き合わせ待ち" + (it.dirty ? "（保留変更 " + it.dirty + "）" : ""); color = "#b45309"; }
+            return E("tr", { key: k },
+              td(itemLabel[k], { fontWeight: 600 }),
+              td(localCount[k] + "件"),
+              td(it.gotFirst ? it.count + "件" : "?"),
+              td(st, { color: color, whiteSpace: "normal", maxWidth: 260 }),
+              td(it.pending ? it.pending + "件" : (it.failed ? it.failed + "件 失敗" : "—"), { color: it.pending || it.failed ? "#b45309" : "#111827" }),
+              td(fmt(it.lastSend)), td(fmt(it.lastReceive)),
+              td(it.failed ? E("button", { className: "btn btn-secondary btn-sm", onClick: () => { retryItemFailed(k); force(v => v + 1); } }, "再送") : null));
+          })))),
+      // この端末だけにあるデータ
+      orphanTotal > 0 && E("div", { style: { background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 12 } },
+        E("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "この端末だけにあったデータ（クラウドに無かったため一覧から外して保管中）"),
+        E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6 } }, "他の端末で削除済みの古いデータか、以前の同期不具合で届かなかった入力のどちらかです。必要なものだけ「クラウドへ復元」してください。"),
+        Object.keys(items).map(k => items[k].orphans ? E("div", { key: k }, E("div", { style: { fontSize: 12, fontWeight: 600, margin: "6px 0 2px" } }, itemLabel[k] + " " + items[k].orphans + "件"), orphanRows(k)) : null)),
       // 操作ボタン
       E("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 } },
-        E("button", { className: "btn btn-warning btn-sm", onClick: () => {
-          if (confirm("上書き保護を60秒間解除し、保留中・失敗分のデータをFirebaseへ今すぐ書き込みます。\nこの端末のデータで他の端末のデータが上書きされます。よろしいですか？")) { allowWritesNow(60); force(x => x + 1); }
-        } }, "🔓 今、書き込み許可（60秒）"),
-        E("button", { className: "btn btn-danger btn-sm", onClick: () => {
-          if (confirm("この端末のローカルデータ全項目をFirebaseへ強制送信します。\n他の端末で入力された未受信のデータが失われる可能性があります。\n本当によろしいですか？")) { forceWriteAll(); force(x => x + 1); }
-        } }, "⬆️ 全項目を強制送信"),
-        E("button", { className: "btn btn-secondary btn-sm", onClick: () => { retryFailedWrites(); force(x => x + 1); }, disabled: failedCount === 0 }, "🔁 失敗分を再送"),
-        E("button", { className: "btn btn-secondary btn-sm", onClick: () => { startFirestoreListeners(); force(x => x + 1); } }, "📡 再接続（再購読）")),
+        E("button", { className: "btn btn-secondary btn-sm", onClick: () => { startFirestoreListeners(); force(x => x + 1); } }, "📡 再接続（再購読）"),
+        E("button", { className: "btn btn-secondary btn-sm", onClick: () => { retryFailedWrites(); Object.keys(items).forEach(k => retryItemFailed(k)); force(x => x + 1); }, disabled: failedCount === 0 && failedTotal === 0 }, "🔁 失敗分を再送"),
+        blockedCount > 0 && E("button", { className: "btn btn-warning btn-sm", onClick: () => {
+          if (confirm("上書き保護を60秒間解除し、保留中のマスタ等をFirebaseへ今すぐ書き込みます。よろしいですか？")) { allowWritesNow(60); force(x => x + 1); }
+        } }, "🔓 保留中のマスタを今すぐ書き込む")),
       // データ整合性
       E(IntegritySection, { horses: horses || [], farms: farms || [], cases: cases || [], setHorses: setHorses, setCases: setCases }),
-      // 項目別テーブル
+      // その他の項目（従来方式）
+      E("div", { style: { fontWeight: 700, fontSize: 13, margin: "10px 0 6px" } }, "マスタ・入金など（項目ごとに同期）"),
       E("div", { style: { overflowX: "auto", marginBottom: 12 } },
         E("table", { style: { width: "100%", borderCollapse: "collapse" } },
           E("thead", null, E("tr", null, th("項目"), th("ローカル"), th("Firebase"), th("受信"), th("最終送信"), th("最終受信"), th("状態"), th(""))),
@@ -11328,26 +11761,38 @@ function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases })
               td(fmt(x.lastWrite)), td(fmt(x.lastReceive)),
               td(st, { color: color, whiteSpace: "normal", maxWidth: 220 }),
               td(ops)); })))),
-      // 直近情報とログ
-      E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6 } }, "最終書き込み: " + r.lastWriteInfo + " ／ 最終受信: " + r.lastReceiveInfo),
-      E("pre", { style: { background: "#111827", color: "#d1d5db", fontSize: 10, padding: 10, borderRadius: 8, maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap", margin: 0 } },
+      E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6 } }, "最終書き込み: " + r.lastWriteInfo + " ／ 最終受信: " + r.lastReceiveInfo, "　",
+        E("a", { href: "#", onClick: e => { e.preventDefault(); setShowLog(v => !v); } }, showLog ? "ログを隠す" : "ログを表示")),
+      showLog && E("pre", { style: { background: "#111827", color: "#d1d5db", fontSize: 10, padding: 10, borderRadius: 8, maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap", margin: 0 } },
         r.log.length ? r.log.join("\n") : "（ログなし）")));
 }
 
-// 画面上部の未送信バナー
+// 画面上部のバナー（未送信・移行中・エラー）
 function SyncBanner({ onOpen }) {
   const E = React.createElement;
+  const [, force] = useState(0);
+  React.useEffect(() => { const t = setInterval(() => force(x => x + 1), 3000); return () => clearInterval(t); }, []);
+  const items = getItemSyncReport();
+  const pending = Object.keys(items).reduce((s, k) => s + (items[k].pendingStale || 0), 0);
+  const failed = Object.keys(items).reduce((s, k) => s + (items[k].failed || 0), 0);
+  const migrating = Object.keys(items).filter(k => items[k].migrating && items[k].migrating.phase !== "done");
   const blocked = Object.keys(_blockedWrites);
-  const failed = Object.keys(_failedWrites);
-  if (blocked.length === 0 && failed.length === 0) return null;
-  const msg = [];
-  if (blocked.length) msg.push("⛔ 上書き保護により書き込みを保留中: " + blocked.join(", "));
-  if (failed.length) msg.push("❌ 送信エラー: " + failed.join(", "));
-  return E("div", { style: { background: "#fef3c7", borderBottom: "2px solid #f59e0b", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, fontSize: 13, color: "#78350f", position: "sticky", top: 0, zIndex: 50 } },
-    E("div", { style: { fontWeight: 600 } }, msg.join("　"), E("span", { style: { fontWeight: 400, marginLeft: 8 } }, "— この端末の入力は他の端末にまだ反映されていません")),
+  const failedDocs = Object.keys(_failedWrites);
+  const offline = !navigator.onLine;
+  const msg = []; let bg = "#fef3c7", border = "#f59e0b", color = "#78350f";
+  if (migrating.length) { msg.push("🔄 " + migrating.map(k => (k === "cases" ? "カルテ" : "馬")).join("・") + "を新しい保存方式へ移行中 " + migrating.map(k => items[k].migrating.phase === "write" ? items[k].migrating.done + "/" + items[k].migrating.total : "…").join(" ")); bg = "#dbeafe"; border = "#3b82f6"; color = "#1e3a8a"; }
+  if (offline) msg.push("📴 オフライン — 入力はこの端末に保持され、通信が戻ると自動で送信されます" + (pending ? "（未送信 " + pending + " 件）" : ""));
+  else if (pending) msg.push("⏳ 未送信 " + pending + " 件を送信中…");
+  if (failed) { msg.push("❌ カルテ・馬の送信 " + failed + " 件がエラー"); bg = "#fee2e2"; border = "#ef4444"; color = "#7f1d1d"; }
+  if (blocked.length) msg.push("⛔ 上書き保護で保留中: " + blocked.join(", "));
+  if (failedDocs.length) msg.push("❌ 送信エラー: " + failedDocs.join(", "));
+  if (!msg.length) return null;
+  return E("div", { style: { background: bg, borderBottom: "2px solid " + border, padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, fontSize: 13, color: color, position: "sticky", top: 0, zIndex: 50 } },
+    E("div", { style: { fontWeight: 600 } }, msg.join("　")),
     E("div", { style: { display: "flex", gap: 6, flexShrink: 0 } },
-      E("button", { className: "btn btn-warning btn-sm", onClick: onOpen }, "確認・今すぐ書き込む")));
+      E("button", { className: "btn btn-secondary btn-sm", onClick: onOpen }, "同期状況")));
 }
+
 
 // ═══════════════ APP ═══════════════
 function App() {
@@ -11425,6 +11870,7 @@ function App() {
   const [memoMode, setMemoMode] = useState(() => (location.hash || "").indexOf("memo") >= 0);
   React.useEffect(() => { const h = () => setMemoMode((location.hash || "").indexOf("memo") >= 0); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
   const [editingCase, setEditingCase] = useState(null);
+  const remoteDelRidsRef = useRef({ caseId: null, rids: new Set() });   // 編集中に他端末が削除した行（復活防止）
   const [showNewHorse, setShowNewHorse] = useState(false);
   const [showNewFarm, setShowNewFarm] = useState(false);
   const [showDrugModal, setShowDrugModal] = useState(false);
@@ -11484,11 +11930,9 @@ function App() {
     // 各データのリモート更新コールバックを登録
     // ピンポン防止は _skipNextWrite フラグで firestoreWrite 側で制御
     registerRemoteUpdateCallback("farms", function(d) { setFarms(d); });
-    registerRemoteUpdateCallback("horses", function(d) { setHorses(d); });
     registerRemoteUpdateCallback("drugsMaster", function(d) { setDrugsMaster(migrateDrugsMaster(d, cases)); });
     registerRemoteUpdateCallback("treatmentsMaster", function(d) { setTreatmentsMaster(d); });
     registerRemoteUpdateCallback("breedingTreatments", function(d) { setBreedingTreatments(d); INIT_BREEDING_TREATMENTS = d; });
-    registerRemoteUpdateCallback("cases", function(d) { setCases(d); });
     registerRemoteUpdateCallback("payments", function(d) { setPayments(d); });
     registerRemoteUpdateCallback("billingActual", function(d) { setBillingActual(d); });
     registerRemoteUpdateCallback("purchaseHistory", function(d) { setPurchaseHistory(d); });
@@ -11496,7 +11940,33 @@ function App() {
     registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
     registerRemoteUpdateCallback("memos", function(d) { setMemos(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
-    registerRemoteUpdateCallback("currentVet", function(d) { setCurrentVet(d); });
+    // v2: カルテ・馬は1件ずつ受信して state に差し込む（配列まるごとの置き換えはしない）
+    const mergeItems = (setter) => (upserts, deletedIds) => setter(prev => {
+      const del = new Set(deletedIds.map(String));
+      const up = new Map(upserts.map(x => [String(x.id), x]));
+      const out = [];
+      prev.forEach(x => {
+        const k = String(x && x.id);
+        if (del.has(k)) return;
+        if (up.has(k)) { out.push(up.get(k)); up.delete(k); } else out.push(x);
+      });
+      up.forEach(x => out.push(x));
+      return out;
+    });
+    // 突き合わせ結果の反映（ids を外す）。ids が空でも配列を作り直して effect を走らせる（保留変更の送信・失敗分の再差分に使う）
+    const dropIds = (setter) => (ids) => { const del = new Set((ids || []).map(String)); setter(prev => prev.filter(x => !del.has(String(x && x.id)))); };
+    registerItemSync("cases", mergeItems(setCases), dropIds(setCases));
+    registerItemSync("horses", mergeItems(setHorses), dropIds(setHorses));
+    // 古い編集コピーで保存したカルテに、他端末の行を補完
+    registerItemPatch("cases", (patches) => setCases(prev => prev.map(c => {
+      const pt = patches.find(x => String(x.id) === String(c.id));
+      if (!pt) return c;
+      const have = new Set((c[pt.rk] || []).map(r => r.rid));
+      const add = pt.rows.filter(r => !have.has(r.rid));
+      if (!add.length) return c;
+      const merged = Object.assign({}, c); merged[pt.rk] = (c[pt.rk] || []).concat(add).sort(_rowSort(pt.rk));
+      return merged;
+    })));
     // 同期ステータスリスナー
     var unsubStatus = onSyncStatusChange(function(s) { setSyncStatus(s); setSyncTick(function(t) { return t + 1; }); });
     // リアルタイムリスナー開始
@@ -11521,11 +11991,11 @@ function App() {
 
   // Firebase同期: 各データ項目を個別に監視・書き込み（他の項目を巻き込まない）
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("farms", farms); }, [farms]);
-  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("horses", horses); }, [horses]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) syncItemsFromState("horses", horses); }, [horses]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("drugsMaster", drugsMaster); }, [drugsMaster]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("treatmentsMaster", treatmentsMaster); }, [treatmentsMaster]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("breedingTreatments", breedingTreatments); }, [breedingTreatments]);
-  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("cases", cases); }, [cases]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) syncItemsFromState("cases", cases); }, [cases]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("payments", payments); }, [payments]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("billingActual", billingActual); }, [billingActual]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("purchaseHistory", purchaseHistory); }, [purchaseHistory]);
@@ -11533,14 +12003,15 @@ function App() {
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("memos", memos); }, [memos]);
   // Claude（Cowork）がメモをカルテ化するための入口（ログイン済みの本番画面でのみ使う）
-  React.useEffect(() => { window.__emr = { saveCase, setCases, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos}) }; });
+  React.useEffect(() => { window.__emr = { saveCase, setCases, setHorses, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos, vets, currentVet}), newRecordId, newRowId, getSyncReport }; });
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
-  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("currentVet", currentVet); }, [currentVet]);
+  // currentVet（獣医師（現在））は端末ごとの設定 → 同期しない（localStorage のみ）
 
   // Reset data function
   const resetAllData = () => {
     if (!confirm("すべてのデータをリセットしますか？\nこの操作は取り消せません。")) return;
     localStorage.removeItem("hokuyo_clinic_data");
+    clearLocalSyncState();
     // Firebaseのデータもリセット
     if (FIREBASE_ENABLED && firebaseDB) {
       var batch = firebaseDB.batch();
@@ -11587,8 +12058,15 @@ function App() {
       if (doc.data().compressed === "lz64") backupData = LZString.decompressFromBase64(backupData);
       if (!backupData || backupData.charAt(0) !== "{") { alert("バックアップデータの展開に失敗しました"); return; }
       lsSetData(backupData);
-      alert("復元完了！ページを再読み込みします。");
-      window.location.reload();
+      clearLocalSyncState();
+      // v2: カルテ・馬はクラウドが正なので、バックアップの内容をクラウドへ明示的に反映してから再読み込み
+      var parsedBk = null; try { parsedBk = JSON.parse(backupData); } catch(e) {}
+      var pushP = Promise.resolve();
+      if (parsedBk && FIREBASE_ENABLED && navigator.onLine && confirm("バックアップのカルテ" + ((parsedBk.cases||[]).length) + "件・馬" + ((parsedBk.horses||[]).length) + "頭をクラウドへも反映しますか？\n（「キャンセル」はこの端末だけ復元。クラウドと突き合わせ後、クラウドに無い分は『この端末だけにあったデータ』に保管されます）")) {
+        pushP = forcePushItems("cases", parsedBk.cases || []).then(function() { return forcePushItems("horses", parsedBk.horses || []); });
+      }
+      pushP.then(function() { alert("復元完了！ページを再読み込みします。"); window.location.reload(); })
+        .catch(function(e) { alert("クラウドへの反映でエラー: " + (e.message || e) + "\nこの端末には復元済みです。再読み込みします。"); window.location.reload(); });
     }).catch(function(e) { alert("復元エラー: " + e.message); });
   };
 
@@ -11829,7 +12307,13 @@ function App() {
           }
           if (!confirm("現在のデータを上書きしてインポートしますか？\n(" + (data.cases?.length || 0) + "件のカルテ、" + (data.exportDate ? data.exportDate.split("T")[0] + "のバックアップ" : "日付不明") + ")")) return;
           lsSetData(JSON.stringify(data));
-          window.location.reload();
+          clearLocalSyncState();
+          // v2: カルテ・馬はクラウドが正。ファイルの内容をクラウドへ反映するかを確認（反映しない場合、クラウドに無い分は「この端末だけ」保管へ）
+          var pushP = Promise.resolve();
+          if (FIREBASE_ENABLED && navigator.onLine && confirm("ファイルのカルテ" + ((data.cases||[]).length) + "件・馬" + ((data.horses||[]).length) + "頭をクラウドへも反映しますか？\n（追加・上書きのみで、クラウドにあってファイルに無いものは消しません）")) {
+            pushP = forcePushItems("cases", data.cases || []).then(function() { return forcePushItems("horses", data.horses || []); });
+          }
+          pushP.then(function() { window.location.reload(); }).catch(function(e2) { alert("クラウドへの反映でエラー: " + (e2.message || e2)); window.location.reload(); });
         } catch (err) {
           alert("ファイルの読み込みに失敗しました: " + err.message);
         }
@@ -12008,9 +12492,43 @@ function App() {
   };
   const saveCase = uc0 => {
     const uc = Object.assign({}, uc0, { updatedAt: new Date().toISOString() });   // ダッシュボード「直近の診療」用の最終更新日時
+    // 行（来院・所見）に rid を付与（未付与の新規行のみ）
+    const rk = uc.type === "一般" ? "visits" : uc.type === "繁殖" ? "findings" : null;
+    if (rk && Array.isArray(uc[rk])) uc[rk] = uc[rk].map(r => (r && typeof r === "object" && !r.rid) ? Object.assign({}, r, { rid: newRowId(), seq: Date.now() }) : r);
+    const delRids = new Set(uc._delRids || []); delete uc._delRids;
+    // 編集画面の元になったカルテ（3方向マージの基準）。他端末の変更を古い編集コピーで巻き戻さないため
+    const base = (editingCase && editingCase.id === uc.id) ? editingCase : null;
+    if (!base || remoteDelRidsRef.current.caseId !== uc.id) remoteDelRidsRef.current = { caseId: uc.id, rids: new Set() };
     setCases(p => {
       const i = p.findIndex(c => c.id === uc.id);
-      return i >= 0 ? p.map(c => c.id === uc.id ? uc : c) : [...p, uc];
+      if (i < 0) return [...p, uc];
+      const cur = p[i];
+      if (base && cur !== base) {
+        // ヘッダー: 編集画面で変えていない項目（uc == base）が他端末で変わっていれば（cur != base）、他端末の値を採る
+        Object.keys(cur).forEach(k => {
+          if (k === rk || k === "updatedAt") return;
+          const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+          if (same(uc[k], base[k]) && !same(cur[k], base[k])) uc[k] = cur[k];
+        });
+      }
+      if (rk && Array.isArray(cur[rk])) {
+        const curMap = new Map(cur[rk].filter(r => r && r.rid).map(r => [r.rid, r]));
+        const baseMap = new Map(((base && base[rk]) || []).filter(r => r && r.rid).map(r => [r.rid, r]));
+        // (1) 他端末が削除した行（base にあり cur に無い）を、未変更のまま持っている編集コピーで復活させない
+        if (base) {
+          baseMap.forEach((br, rid) => { if (!curMap.has(rid)) remoteDelRidsRef.current.rids.add(rid); });
+          uc[rk] = (uc[rk] || []).filter(r => {
+            if (!r || !r.rid || !remoteDelRidsRef.current.rids.has(r.rid)) return true;
+            const br = baseMap.get(r.rid);
+            return br ? JSON.stringify(r) !== JSON.stringify(br) : true;   // 編集していれば残す（編集した側が勝つ）
+          });
+        }
+        // (2) 他端末が追加した行が、この画面の編集コピーに無くても消さない（明示的に削除した行 _delRids を除く）
+        const have = new Set((uc[rk] || []).map(r => r && r.rid));
+        const keep = cur[rk].filter(r => r && r.rid && !have.has(r.rid) && !delRids.has(r.rid));
+        if (keep.length) uc[rk] = (uc[rk] || []).concat(keep).sort(_rowSort(rk));
+      }
+      return p.map(c => c.id === uc.id ? uc : c);
     });
     // 常にeditingCaseを更新 → カルテを開いたまま保存できる
     setEditingCase(uc);
@@ -12061,7 +12579,7 @@ function App() {
           onUpdateHorse: (horseId, updates) => setHorses(p => p.map(h => h.id === horseId ? {...h, ...updates} : h)),
           preSelectedFarmName: gFilterFarm || "",
           lastAddedHorseId: lastAddedHorseId,
-          currentVet: currentVet
+          currentVet: currentVet, vets: vets
         });
       case "general_edit":
         return /*#__PURE__*/React.createElement(GeneralKartePage, {
@@ -12082,7 +12600,7 @@ function App() {
           onAddFarm: f => { setFarms(p => [...p, f]); return f; },
           onUpdateHorse: (horseId, updates) => setHorses(p => p.map(h => h.id === horseId ? {...h, ...updates} : h)),
           lastAddedHorseId: lastAddedHorseId,
-          currentVet: currentVet
+          currentVet: currentVet, vets: vets
         });
       case "general":
         return renderGeneralList();
@@ -12115,7 +12633,7 @@ function App() {
           onAddHorse: h => { setHorses(p => [...p, h]); setLastAddedHorseId(h.id); return h; },
           onAddFarm: f => { setFarms(p => [...p, f]); return f; },
           lastAddedHorseId: lastAddedHorseId,
-          currentVet: currentVet
+          currentVet: currentVet, vets: vets
         }));
       case "breeding_edit":
         const bFilterLabel = [bFilterFarm, bFilterStatus, bFilterBStatus, bFilter15Day ? "鑑定日" : ""].filter(Boolean).join("・");
@@ -12134,7 +12652,7 @@ function App() {
           onAddHorse: h => { setHorses(p => [...p, h]); setLastAddedHorseId(h.id); return h; },
           onAddFarm: f => { setFarms(p => [...p, f]); return f; },
           lastAddedHorseId: lastAddedHorseId,
-          currentVet: currentVet
+          currentVet: currentVet, vets: vets
         }));
       case "pharma":
         return renderPharmaList();
@@ -12892,10 +13410,11 @@ function App() {
       return [];
     };
     // ── ヘルパー: ケースの日別売上を取得 ──
+    // 担当獣医師は来院行・所見行ごと（無ければカルテの獣医師）
     const caseDateAmounts = (c) => {
-      if (c.type === "一般") return (c.visits || []).filter(v => v.date).map(v => ({date: v.date, amount: calcVisitTotal(v, drugsMaster)}));
-      if (c.type === "繁殖") return (c.findings || []).filter(f => f.date).map(f => ({date: f.date, amount: calcBreedingVisitTotal(f, INIT_BREEDING_TREATMENTS)}));
-      if (c.type === "薬事") return [{date: c.openDate, amount: (c.pharmaItems || []).reduce((s, x) => s + (x.price || 0), 0)}];
+      if (c.type === "一般") return (c.visits || []).filter(v => v.date).map(v => ({date: v.date, amount: calcVisitTotal(v, drugsMaster), vet: v.vet || c.vet || "佐藤"}));
+      if (c.type === "繁殖") return (c.findings || []).filter(f => f.date).map(f => ({date: f.date, amount: calcBreedingVisitTotal(f, INIT_BREEDING_TREATMENTS), vet: f.vet || c.vet || "佐藤"}));
+      if (c.type === "薬事") return [{date: c.openDate, amount: (c.pharmaItems || []).reduce((s, x) => s + (x.price || 0), 0), vet: c.vet || "佐藤"}];
       return [];
     };
     // ── 年度フィルター済みデータ ──
@@ -12911,7 +13430,7 @@ function App() {
             month: parseInt(da.date.slice(5, 7)),
             amount: da.amount,
             type: c.type,
-            vet: c.vet || "佐藤",
+            vet: da.vet || c.vet || "佐藤",
             farmName: f?.name || "不明",
             farmId: f?.id,
             diagnosis: c.diagnosis || "",
@@ -13133,7 +13652,28 @@ function App() {
                 return E("div", {key:mi,style:{flex:1,background:mAmt>0?"#86efac":"#f3f4f6",height:Math.max(mAmt/mMax*28,2),borderRadius:"2px 2px 0 0"},title:(mi+1)+"月 ¥"+mAmt.toLocaleString()});
               }),
               E("div", {style:{fontSize:9,color:"#9ca3af",marginLeft:4}}, "1-12月")));
-        }))),
+        }),
+        // 月 × 獣医師（来院行・所見行の担当で集計。税抜）
+        E("div", {style:{overflowX:"auto", marginTop:8}},
+          E("table", {style:{width:"100%", borderCollapse:"collapse", fontSize:12}},
+            E("thead", null, E("tr", null,
+              E("th", {style:{textAlign:"left", padding:"6px 8px", borderBottom:"2px solid #e5e7eb"}}, "月"),
+              vetRanking.map(([vet]) => E("th", {key:vet, style:{textAlign:"right", padding:"6px 8px", borderBottom:"2px solid #e5e7eb"}}, vet)),
+              E("th", {style:{textAlign:"right", padding:"6px 8px", borderBottom:"2px solid #e5e7eb"}}, "合計"))),
+            E("tbody", null, Array.from({length:12},(_,mi)=>{
+              const row = vetRanking.map(([vet]) => yearAmounts.filter(x => x.month === mi+1 && x.vet === vet).reduce((s,x)=>s+x.amount,0));
+              const tot = row.reduce((s,x)=>s+x,0);
+              if (!tot) return null;
+              return E("tr", {key:mi},
+                E("td", {style:{padding:"5px 8px", borderBottom:"1px solid #f3f4f6"}}, (mi+1) + "月"),
+                row.map((v, vi) => E("td", {key:vi, style:{textAlign:"right", padding:"5px 8px", borderBottom:"1px solid #f3f4f6"}}, v ? "¥" + v.toLocaleString() : "—")),
+                E("td", {style:{textAlign:"right", padding:"5px 8px", borderBottom:"1px solid #f3f4f6", fontWeight:600}}, "¥" + tot.toLocaleString()));
+            })),
+            E("tfoot", null, E("tr", null,
+              E("td", {style:{padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "年計"),
+              vetRanking.map(([vet, amt]) => E("td", {key:vet, style:{textAlign:"right", padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "¥" + amt.toLocaleString())),
+              E("td", {style:{textAlign:"right", padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "¥" + yearTotal.toLocaleString()))))),
+        E("div", {style:{fontSize:11, color:"#6b7280", marginTop:6}}, "※ 来院行・所見行ごとの担当獣医師で集計（担当が未記録の行はカルテの獣医師）。税抜"))),
       // ── 病名別 ──
       rptTab === "diag" && card("病名別売上", E("div", null,
         diagRanking.length === 0 ? E("p", {style:{color:"#9ca3af",fontSize:13}}, "一般診療の病名データがありません") :
@@ -13363,7 +13903,12 @@ function App() {
         local: { color: "#6b7280", text: "💾 ローカル", bg: "#1f2937" }
       };
       var unsent = syncHasUnsent();
-      var s = statusMap[unsent && syncStatus === "online" ? "blocked" : syncStatus] || statusMap.local;
+      var blockedN = Object.keys(_blockedWrites).length + Object.keys(_failedWrites).length;
+      var itemsRep = getItemSyncReport();
+      var migratingNow = Object.keys(itemsRep).some(function(k) { return itemsRep[k].migrating && itemsRep[k].migrating.phase !== "done"; });
+      var notReadyNow = Object.keys(itemsRep).some(function(k) { return !itemsRep[k].ready; });
+      var s = statusMap[blockedN && syncStatus === "online" ? "blocked" : (!navigator.onLine ? "offline" : (migratingNow || notReadyNow) && syncStatus === "online" ? "syncing" : syncStatus)] || statusMap.local;
+      if (migratingNow) s = Object.assign({}, s, { text: "🔄 移行中..." });
       return React.createElement("div", {
         style: { cursor: "pointer" },
         title: "クリックで同期状況・未送信データを表示",
