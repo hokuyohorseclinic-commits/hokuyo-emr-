@@ -137,7 +137,7 @@ var _lastWriteInfo = "なし";
 var _firebaseDataCounts = {};
 var _lastBackupTime = 0;
 var _lastReceiveInfo = "なし";
-var SYNC_DATA_VERSION = "2026-11-07v2";
+var SYNC_DATA_VERSION = "2026-11-09v2a";
 var OVERWRITE_PROTECT_RATIO = 0.1;
 var _blockedWrites = {};
 var _failedWrites = {};
@@ -649,6 +649,27 @@ function _clean(obj) { return JSON.parse(JSON.stringify(obj)); }   // undefined 
 function _idKey(id) { return String(id); }
 function _numId(s) { var n = Number(s); return (s !== "" && !isNaN(n) && String(n) === String(s)) ? n : s; }
 
+// 行の内容の目印（rid/seq/担当/確定金額などの付随項目を除いた中身）
+function _rowSig(r) {
+  if (!r || typeof r !== "object") return "";
+  return [r.date || "", (r.procedures || []).join("+"), r.visitType || "", _j(r.treatments || []), _j((r.drugs || []).map(function(d) { return [d.drugId, d.dose]; })),
+          r.memo || "", r.schedule || "", r.insem ? 1 : 0, r.concep ? 1 : 0, r.notConcep ? 1 : 0, r.ovL || "", r.ovR || ""].join("|");
+}
+// rid の無い行に、既存の行（サーバー側・state 側）と同じ内容なら同じ rid を引き継ぐ（1対1）。
+// 移行前の古い手元データから保存したとき、同じ行が新しい rid で二重に増えるのを防ぐ（2026-11-08 の重複事故の対策）
+function adoptRowIds(rows, knownRows) {
+  if (!Array.isArray(rows) || !knownRows) return rows;
+  var known = Array.isArray(knownRows) ? knownRows : Object.keys(knownRows).map(function(k) { var r = knownRows[k]; if (r && !r.rid) r.rid = k; return r; });
+  var used = {}; rows.forEach(function(r) { if (r && r.rid) used[r.rid] = 1; });
+  var pool = {};
+  known.forEach(function(k) { if (!k || !k.rid || used[k.rid]) return; var sg = _rowSig(k); (pool[sg] = pool[sg] || []).push(k); });
+  return rows.map(function(r) {
+    if (!r || typeof r !== "object" || r.rid) return r;
+    var cand = pool[_rowSig(r)];
+    if (cand && cand.length) { var k = cand.shift(); return Object.assign({}, r, { rid: k.rid, seq: k.seq }); }
+    return r;
+  });
+}
 // 行の rid/seq を保証（既存の行オブジェクトに直接付与して identity を保つ）
 function ensureRowIds(c, deterministic) {
   var def = ITEM_DEFS.cases;
@@ -759,6 +780,13 @@ function syncItemsFromState(name, arr) {
     if (!ready) { if (!st.dirty[key]) { st.dirty[key] = 1; st.base[key] = st.lastSynced[key] ? _clean(st.lastSynced[key]) : null; _saveDirty(name); } return; } // 初回突き合わせ前 → 後でまとめて送る
     delete st.forceIds[key];
     var last = st.lastSynced[key];
+    if (name === "cases" && last && last.rows) {
+      var rkA = ITEM_DEFS.cases.rowsKeyOf(item);
+      if (rkA && Array.isArray(item[rkA]) && item[rkA].some(function(r) { return r && !r.rid; })) {
+        var adopted = adoptRowIds(item[rkA], last.rows);
+        for (var ai = 0; ai < adopted.length; ai++) { if (adopted[ai] !== item[rkA][ai] && adopted[ai] && adopted[ai].rid) { item[rkA][ai].rid = adopted[ai].rid; item[rkA][ai].seq = adopted[ai].seq; } }
+      }
+    }
     if (name === "cases") ensureRowIds(item, !last);
     var doc = _clean(itemToDoc(name, item));
     if (!last) {
@@ -12494,7 +12522,13 @@ function App() {
     const uc = Object.assign({}, uc0, { updatedAt: new Date().toISOString() });   // ダッシュボード「直近の診療」用の最終更新日時
     // 行（来院・所見）に rid を付与（未付与の新規行のみ）
     const rk = uc.type === "一般" ? "visits" : uc.type === "繁殖" ? "findings" : null;
-    if (rk && Array.isArray(uc[rk])) uc[rk] = uc[rk].map(r => (r && typeof r === "object" && !r.rid) ? Object.assign({}, r, { rid: newRowId(), seq: Date.now() }) : r);
+    if (rk && Array.isArray(uc[rk])) {
+      const curCase = (window.__emr && window.__emr.getState ? window.__emr.getState().cases : []).find(c => c.id === uc.id);
+      const lastDoc = _itemState.cases.lastSynced[String(uc.id)];
+      if (curCase && Array.isArray(curCase[rk])) uc[rk] = adoptRowIds(uc[rk], curCase[rk]);
+      if (lastDoc && lastDoc.rows) uc[rk] = adoptRowIds(uc[rk], lastDoc.rows);
+      uc[rk] = uc[rk].map(r => (r && typeof r === "object" && !r.rid) ? Object.assign({}, r, { rid: newRowId(), seq: Date.now() }) : r);
+    }
     const delRids = new Set(uc._delRids || []); delete uc._delRids;
     // 編集画面の元になったカルテ（3方向マージの基準）。他端末の変更を古い編集コピーで巻き戻さないため
     const base = (editingCase && editingCase.id === uc.id) ? editingCase : null;
