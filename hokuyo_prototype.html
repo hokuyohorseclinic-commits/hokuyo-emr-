@@ -137,7 +137,7 @@ var _lastWriteInfo = "なし";
 var _firebaseDataCounts = {};
 var _lastBackupTime = 0;
 var _lastReceiveInfo = "なし";
-var SYNC_DATA_VERSION = "2026-11-09v2a";
+var SYNC_DATA_VERSION = "2026-11-10v2b";
 var OVERWRITE_PROTECT_RATIO = 0.1;
 var _blockedWrites = {};
 var _failedWrites = {};
@@ -365,10 +365,10 @@ function _notifySyncChange() {
 
 // ─── 従来方式（1項目＝1ドキュメント）の対象 ───
 // Collection: "clinicData" / Document: <項目名> → { data, updatedAt, updatedBy }
-// ※ cases・horses は v2 の個別保存へ移行済み（下記 ITEM_SYNC）。currentVet は端末ごとの設定になり同期しない
+// ※ cases・horses・farms は v2 の個別保存へ移行済み（下記 ITEM_SYNC）。currentVet は端末ごとの設定になり同期しない
 var SYNC_COLLECTION = "clinicData";
 var SYNC_FIELDS = [
-  "farms", "drugsMaster", "treatmentsMaster",
+  "drugsMaster", "treatmentsMaster",
   "breedingTreatments", "payments", "billingActual",
   "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos"
 ];
@@ -610,8 +610,10 @@ function startFirestoreListeners() {
 // メモリ上（React state）の形は従来どおり（visits / findings は配列）。
 var ITEM_DEFS = {
   cases:  { col: "cases",  legacyDoc: "cases",  rowsKeyOf: function(c) { return c.type === "一般" ? "visits" : c.type === "繁殖" ? "findings" : null; } },
-  horses: { col: "horses", legacyDoc: "horses", rowsKeyOf: function() { return null; } }
+  horses: { col: "horses", legacyDoc: "horses", rowsKeyOf: function() { return null; } },
+  farms:  { col: "farms",  legacyDoc: "farms",  rowsKeyOf: function() { return null; } }
 };
+var ITEM_LABELS = { cases: "カルテ", horses: "馬", farms: "牧場" };
 var ITEM_INTERNAL = { _v: 1, _updatedAt: 1, _updatedBy: 1, _deleted: 1, _deletedAt: 1, _migrated: 1, rows: 1, rk: 1 };
 var _itemState = {};
 Object.keys(ITEM_DEFS).forEach(function(name) {
@@ -755,6 +757,24 @@ function _sortKeys(v) {
   return v;
 }
 
+// ─── 同じ行の同時編集（上書き）の記録 ───
+// 15分以内に「この端末で直した行」を他端末が直した／「他端末が直した行」をこの端末が直した、ときに
+// 置き換え前の内容を端末内（localStorage）に残し、同期パネルで見て戻せるようにする
+var CONFLICT_WINDOW_MS = 15 * 60 * 1000;
+var _localRowEdit = {};    // "caseId|rid" → 時刻
+var _remoteRowEdit = {};   // "caseId|rid" → { at, by, row }
+function _logConflict(entry) {
+  try {
+    var cur = JSON.parse(localStorage.getItem("hokuyo_conflicts") || "[]");
+    cur.push(entry);
+    if (cur.length > 200) cur = cur.slice(cur.length - 200);
+    localStorage.setItem("hokuyo_conflicts", JSON.stringify(cur));
+    _addDebug("⚠️ 同じ行の同時編集を記録: " + entry.caseId + " " + (entry.date || "") + "（" + entry.dir + "）");
+  } catch(e) {}
+}
+function getConflicts() { try { return JSON.parse(localStorage.getItem("hokuyo_conflicts") || "[]"); } catch(e) { return []; } }
+function setConflicts(list) { try { localStorage.setItem("hokuyo_conflicts", JSON.stringify(list)); } catch(e) {} }
+
 // ローカルの配列と前回状態を比べ、変わった分だけ Firestore に書く
 function syncItemsFromState(name, arr) {
   var st = _itemState[name];
@@ -809,7 +829,16 @@ function syncItemsFromState(name, arr) {
     if (doc.rk || last.rk) {
       var lrows = last.rows || {}, drows = doc.rows || {};
       Object.keys(drows).forEach(function(rid) {
-        if (_j(drows[rid]) !== _j(lrows[rid])) rowOps.push({ rid: rid, value: drows[rid] });
+        if (_j(drows[rid]) !== _j(lrows[rid])) {
+          rowOps.push({ rid: rid, value: drows[rid] });
+          var ck = key + "|" + rid, now = Date.now();
+          var re = _remoteRowEdit[ck];
+          if (re && now - re.at < CONFLICT_WINDOW_MS && lrows[rid]) {
+            _logConflict({ at: new Date().toISOString(), caseId: item.id, rid: rid, date: drows[rid].date || "", dir: "この端末の入力で、他端末の直前の変更を置き換え", other: re.by, replaced: lrows[rid], kept: drows[rid] });
+            delete _remoteRowEdit[ck];
+          }
+          _localRowEdit[ck] = now;
+        }
       });
       var prevRows = {};
       if (p && doc.rk && Array.isArray(p[doc.rk])) p[doc.rk].forEach(function(r) { if (r && r.rid) prevRows[r.rid] = 1; });
@@ -975,6 +1004,24 @@ function startItemListeners() {
           deleted.push(id); delete st.lastSynced[key];
         } else {
           d.id = id;
+          var prevDoc = st.lastSynced[key];
+          if (name === "cases" && prevDoc && d._updatedBy && d._updatedBy !== _deviceId && d.rows) {
+            var nowT = Date.now();
+            var localItemC = (Array.isArray(st.lastState) ? st.lastState : []).filter(function(x) { return x && _idKey(x.id) === key; })[0];
+            var lrk = ITEM_DEFS.cases.rowsKeyOf(d);
+            Object.keys(d.rows).forEach(function(rid) {
+              var nr = d.rows[rid], pr = (prevDoc.rows || {})[rid];
+              if (!pr || _j(nr) === _j(pr)) return;
+              var ck = key + "|" + rid;
+              _remoteRowEdit[ck] = { at: nowT, by: d._updatedBy, row: _clean(nr) };
+              var le = _localRowEdit[ck];
+              if (le && nowT - le < CONFLICT_WINDOW_MS) {
+                var mine = localItemC && lrk ? (localItemC[lrk] || []).filter(function(r) { return r && r.rid === rid; })[0] : null;
+                if (mine && _j(mine) !== _j(nr)) _logConflict({ at: new Date().toISOString(), caseId: d.id, rid: rid, date: nr.date || "", dir: "他端末の変更で、この端末の入力が置き換えられた", other: d._updatedBy, replaced: _clean(mine), kept: _clean(nr) });
+                delete _localRowEdit[ck];
+              }
+            });
+          }
           st.lastSynced[key] = _clean(d);
           if (!st.ready && st.dirty[key]) {
             // 突き合わせ前のローカル変更を失わないよう 3方向マージ（結果は「ローカル変更あり」のまま扱う）
@@ -1170,6 +1217,24 @@ function forcePushItems(name, items) {
     })(list.slice(i, i + 250));
   }
   return chain.then(function() { return list.length; });
+}
+
+// 移行前の一括保存ドキュメントを削除（全端末の切替後に同期パネルから実行）
+function retireLegacyDocs() {
+  var col = firebaseDB.collection(SYNC_COLLECTION);
+  return col.doc("cases").get().then(function(s) {
+    var names = ["cases", "horses", "farms"];
+    var n = (s.exists && s.data().chunked) ? (s.data().totalChunks || 0) : 0;
+    for (var i = 0; i < Math.max(n, 40); i++) names.push("cases_chunk_" + i);
+    return Promise.all(names.map(function(nm) { return col.doc(nm).get().then(function(x) { return x.exists ? nm : null; }); }));
+  }).then(function(exist) {
+    var del = exist.filter(Boolean);
+    var batch = firebaseDB.batch();
+    del.forEach(function(nm) { batch.delete(col.doc(nm)); });
+    return batch.commit().then(function() {
+      return col.doc("meta").set({ legacyRetired: { at: new Date().toISOString(), by: _deviceId, docs: del } }, { merge: true });
+    }).then(function() { _addDebug("旧一括データ削除: " + del.join(",")); return del.length; });
+  });
 }
 
 // ─── この端末だけにあるデータ（突き合わせで外したもの）の保管 ───
@@ -11605,6 +11670,8 @@ function IntegritySection({ horses, farms, cases, setHorses, setCases }) {
   const [horseNames, setHorseNames] = useState({});
   const [horseSex, setHorseSex] = useState({});
   const [linkTo, setLinkTo] = useState({});
+  const [keepId, setKeepId] = useState({});        // 同名馬の統合: 残す馬
+  const [showAllDups, setShowAllDups] = useState(false);
   const horseIds = new Set(horses.map(h => h.id));
   const farmName = id => (farms.find(f => f.id === id) || {}).name || "";
   // 馬IDが0以外で馬マスタに存在しないカルテをID別にまとめる
@@ -11656,22 +11723,79 @@ function IntegritySection({ horses, farms, cases, setHorses, setCases }) {
               setCases(p => p.map(c => c.horseId === hid ? { ...c, horseId: target.id } : c));
             } }, "付け替え")));
       })),
-    dups.length > 0 && sec("👯 同名の馬（重複の可能性）",
-      dups.map(group => E("div", { key: group[0].name, style: { fontSize: 12, marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
-        E("b", { style: { width: 140 } }, group[0].name),
-        group.map(h => {
-          const n = caseCount(h.id);
-          return E("span", { key: h.id, style: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", display: "inline-flex", gap: 6, alignItems: "center" } },
-            farmName(h.farmId) + "（カルテ" + n + "件）",
-            n === 0 && E("button", { className: "btn btn-danger btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => {
-              if (!confirm("「" + h.name + "」（" + farmName(h.farmId) + "・カルテ0件）を削除します。よろしいですか？")) return;
-              setHorses(p => p.filter(x => x.id !== h.id));
-            } }, "削除"));
-        })))));
+    dups.length > 0 && sec("👯 同名の馬（重複の可能性）" + dups.length + "組",
+      E("div", null,
+        E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6, lineHeight: 1.6 } },
+          "同じ馬が牧場名の表記違いなどで別IDになったものを1頭にまとめます。残す馬を選んで「統合」を押すと、他の馬のカルテ・繁殖記録をすべて残す馬に付け替え、他の馬はマスタから外します。",
+          E("br"), "※ カルテの請求先（牧場）はカルテに記録された牧場のまま変わりません。別の馬が偶然同名のとき（例: 母名＋年号の当歳が別牧場）は統合しないでください。"),
+        (showAllDups ? dups : dups.slice(0, 30)).map(group => {
+          const gk = group.map(h => h.id).join("_");
+          const sel = keepId[gk] || String(group.slice().sort((a, b) => caseCount(b.id) - caseCount(a.id))[0].id);
+          return E("div", { key: gk, style: { fontSize: 12, marginTop: 6, paddingTop: 6, borderTop: "1px dashed #fecaca", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
+            E("b", { style: { width: 150 } }, group[0].name),
+            group.map(h => {
+              const n = caseCount(h.id);
+              return E("label", { key: h.id, style: { background: String(h.id) === sel ? "#ecfdf5" : "#fff", border: "1px solid " + (String(h.id) === sel ? "#10b981" : "#e5e7eb"), borderRadius: 6, padding: "3px 8px", display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" } },
+                E("input", { type: "radio", name: "keep_" + gk, checked: String(h.id) === sel, onChange: () => setKeepId({ ...keepId, [gk]: String(h.id) }) }),
+                (farmName(h.farmId) || "牧場なし") + "（" + (h.sex || "") + (h.birthDate ? " " + h.birthDate.slice(0, 4) : "") + "・カルテ" + n + "件）");
+            }),
+            E("button", { className: "btn btn-primary btn-sm", style: { padding: "2px 10px", fontSize: 11 }, onClick: () => {
+              const keep = group.find(h => String(h.id) === sel);
+              const others = group.filter(h => h !== keep);
+              const moving = cases.filter(c => others.some(o => o.id === c.horseId)).length;
+              if (!confirm("「" + keep.name + "」を「" + (farmName(keep.farmId) || "牧場なし") + "」の馬に統合します。\n他の " + others.length + " 頭のカルテ " + moving + " 件を付け替え、" + others.length + " 頭をマスタから外します。\nよろしいですか？")) return;
+              const otherIds = new Set(others.map(o => o.id));
+              // 空欄だけ他の馬の情報で補う（父・母・生年月日・毛色など）
+              const filled = Object.assign({}, keep);
+              others.forEach(o => Object.keys(o).forEach(k => { if (k !== "id" && k !== "farmId" && (filled[k] === undefined || filled[k] === "" || filled[k] === null) && o[k] !== "" && o[k] !== undefined && o[k] !== null) filled[k] = o[k]; }));
+              filled.mergedFrom = (keep.mergedFrom || []).concat(others.map(o => ({ id: o.id, farmId: o.farmId, at: new Date().toISOString() })));
+              setCases(p => p.map(c => otherIds.has(c.horseId) ? Object.assign({}, c, { horseId: keep.id, mergedHorseFrom: c.horseId }) : c));
+              setHorses(p => p.filter(h => !otherIds.has(h.id)).map(h => h.id === keep.id ? filled : h));
+            } }, "統合"));
+        }),
+        dups.length > 30 && E("div", { style: { marginTop: 8 } }, E("a", { href: "#", onClick: e => { e.preventDefault(); setShowAllDups(v => !v); } }, showAllDups ? "先頭30組だけ表示" : "残り " + (dups.length - 30) + " 組も表示")))));
+}
+
+// 同じ行の同時編集（上書き）の履歴: 置き換え前の内容を見て、必要なら戻す
+function ConflictSection({ cases, horses, setCases }) {
+  const E = React.createElement;
+  const [, force] = useState(0);
+  const [open, setOpen] = useState(null);
+  const list = getConflicts().slice().reverse();
+  if (!list.length) return null;
+  const sum = r => {
+    if (!r) return "（なし）";
+    const parts = [r.date || "", r.visitType || "", (r.procedures || []).join("・"), (r.treatments || []).map(t => t.name).join("・"), (r.drugs || []).length ? "薬" + r.drugs.length + "件" : "", r.vet ? "担当:" + r.vet : "", r.memo ? "メモ:" + String(r.memo).slice(0, 30) : ""];
+    return parts.filter(Boolean).join(" ／ ");
+  };
+  const label = cid => { const c = cases.find(x => String(x.id) === String(cid)); if (!c) return "カルテ " + cid; const h = horses.find(x => x.id === c.horseId); return (h ? h.name : "馬不明") + "（" + (c.type || "") + "）"; };
+  const restore = (en) => {
+    const c = cases.find(x => String(x.id) === String(en.caseId)); if (!c) { alert("カルテが見つかりません"); return; }
+    const rk = c.type === "一般" ? "visits" : c.type === "繁殖" ? "findings" : null; if (!rk) return;
+    if (!confirm("この行を置き換え前の内容に戻します。よろしいですか？\n" + sum(en.replaced))) return;
+    setCases(p => p.map(x => x.id !== c.id ? x : Object.assign({}, x, { [rk]: (x[rk] || []).map(r => r.rid === en.rid ? Object.assign({}, en.replaced, { rid: en.rid, seq: r.seq }) : r) })));
+    setConflicts(getConflicts().map(z => (z.at === en.at && z.rid === en.rid) ? Object.assign({}, z, { restoredAt: new Date().toISOString() }) : z));
+    force(v => v + 1);
+  };
+  return E("div", { style: { background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 12px", marginBottom: 12 } },
+    E("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
+      E("div", { style: { fontWeight: 700, fontSize: 13 } }, "同じ行の同時編集（上書き）の履歴 " + list.length + "件"),
+      E("button", { className: "btn btn-secondary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => { if (confirm("この端末の上書き履歴を消去します。よろしいですか？")) { setConflicts([]); force(v => v + 1); } } }, "履歴を消去")),
+    E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6 } }, "2台で15分以内に同じ来院行・経過行を直したとき、後から保存した内容が残ります。消えた側の内容をここで確認し、必要なら戻せます（この端末で起きた分のみ表示）。"),
+    list.slice(0, 50).map((en, i) => E("div", { key: en.at + en.rid, style: { borderTop: "1px solid #fde68a", padding: "6px 0", fontSize: 12 } },
+      E("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+        E("span", { style: { color: "#92400e" } }, (en.at || "").slice(5, 16).replace("T", " ")),
+        E("b", null, label(en.caseId)), E("span", null, en.date || ""),
+        E("span", { style: { color: "#6b7280" } }, en.dir + "（相手端末 " + String(en.other || "").slice(-6) + "）"),
+        E("a", { href: "#", onClick: e => { e.preventDefault(); setOpen(open === i ? null : i); } }, open === i ? "閉じる" : "内容を見る"),
+        en.restoredAt ? E("span", { style: { color: "#16a34a" } }, "✓ 戻し済み") : E("button", { className: "btn btn-secondary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => restore(en) }, "置き換え前に戻す")),
+      open === i && E("div", { style: { marginTop: 4, fontSize: 11, lineHeight: 1.6 } },
+        E("div", null, E("b", null, "置き換えられた内容: "), sum(en.replaced)),
+        E("div", null, E("b", null, "残った内容: "), sum(en.kept))))));
 }
 
 // ═══════════════ 同期パネル（v2: カルテ・馬は1件ずつ同期／その他は項目ごと） ═══════════════
-function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases }) {
+function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases, setFarms }) {
   const E = React.createElement;
   const [, force] = useState(0);
   const [showLog, setShowLog] = useState(false);
@@ -11685,22 +11809,22 @@ function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases })
   const td = (t, style) => E("td", { style: Object.assign({ padding: "6px 8px", fontSize: 12, borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }, style || {}) }, t);
   const statusLabel = { online: "☁️ 同期中", syncing: "🔄 初回ロード中", offline: "📴 オフライン", error: "⚠️ エラー", blocked: "⛔ 保留あり", local: "💾 ローカル" }[r.status] || r.status;
   const items = r.items || {};
-  const itemLabel = { cases: "カルテ", horses: "馬" };
+  const itemLabel = ITEM_LABELS;
   const pendingTotal = Object.keys(items).reduce((s, k) => s + (items[k].pending || 0), 0);
   const failedTotal = Object.keys(items).reduce((s, k) => s + (items[k].failed || 0), 0);
   const orphanTotal = Object.keys(items).reduce((s, k) => s + (items[k].orphans || 0), 0);
   const migrating = Object.keys(items).filter(k => items[k].migrating && items[k].migrating.phase !== "done");
   const notReady = Object.keys(items).filter(k => !items[k].ready);
-  const localCount = { cases: (cases || []).length, horses: (horses || []).length };
+  const localCount = { cases: (cases || []).length, horses: (horses || []).length, farms: (farms || []).length };
   const orphanRows = (name) => getOrphans(name).map(o => {
     const it = o.item || {};
     const h = name === "cases" ? (horses || []).find(x => x.id === it.horseId) : null;
-    const label = name === "cases" ? ((it.type || "") + "　" + (h ? h.name : "馬ID " + it.horseId) + "　" + (it.openDate || "") + "　" + (it.diagnosis || "")) : ((it.name || "") + "　" + ((farms || []).find(f => f.id === it.farmId) || {}).name || "");
+    const label = name === "cases" ? ((it.type || "") + "　" + (h ? h.name : "馬ID " + it.horseId) + "　" + (it.openDate || "") + "　" + (it.diagnosis || "")) : name === "farms" ? (it.name || "") : ((it.name || "") + "　" + (((farms || []).find(f => f.id === it.farmId) || {}).name || ""));
     return E("div", { key: String(it.id), style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f3f4f6", fontSize: 12 } },
       E("span", { style: { flex: 1 } }, label, E("span", { style: { color: "#9ca3af", marginLeft: 6, fontSize: 10 } }, "保管 " + (o.at || "").slice(0, 16).replace("T", " "))),
       E("button", { className: "btn btn-primary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => {
         if (!confirm("この" + itemLabel[name] + "をクラウドへ復元します（同じIDが他端末で削除されていた場合も復活します）。よろしいですか？")) return;
-        forcePushItems(name, [it]).then(() => { removeOrphan(name, it.id); (name === "cases" ? setCases : setHorses)(prev => prev.some(x => String(x.id) === String(it.id)) ? prev : prev.concat([it])); force(x => x + 1); })
+        forcePushItems(name, [it]).then(() => { removeOrphan(name, it.id); (name === "cases" ? setCases : name === "farms" ? setFarms : setHorses)(prev => prev.some(x => String(x.id) === String(it.id)) ? prev : prev.concat([it])); force(x => x + 1); })
           .catch(e => alert("復元エラー: " + (e.message || e)));
       } }, "クラウドへ復元"),
       E("button", { className: "btn btn-secondary btn-sm", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => { if (confirm("この端末の保管分から削除します。よろしいですか？")) { removeOrphan(name, it.id); force(x => x + 1); } } }, "破棄"));
@@ -11730,7 +11854,7 @@ function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases })
         failedCount > 0 && E("div", null, "❌ " + failedCount + " 項目（マスタ等）の送信がエラーになっています。"),
         notReceived.length > 0 && E("div", null, "📡 未受信の項目: " + notReceived.join(", "))),
       // カルテ・馬（v2）
-      E("div", { style: { fontWeight: 700, fontSize: 13, margin: "4px 0 6px" } }, "カルテ・馬（1件ずつ同期）"),
+      E("div", { style: { fontWeight: 700, fontSize: 13, margin: "4px 0 6px" } }, "カルテ・馬・牧場（1件ずつ同期）"),
       E("div", { style: { overflowX: "auto", marginBottom: 12 } },
         E("table", { style: { width: "100%", borderCollapse: "collapse" } },
           E("thead", null, E("tr", null, th("項目"), th("この端末"), th("クラウド"), th("状態"), th("未送信"), th("最終送信"), th("最終受信"), th(""))),
@@ -11755,13 +11879,19 @@ function SyncPanel({ onClose, tick, horses, farms, cases, setHorses, setCases })
         E("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "この端末だけにあったデータ（クラウドに無かったため一覧から外して保管中）"),
         E("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 6 } }, "他の端末で削除済みの古いデータか、以前の同期不具合で届かなかった入力のどちらかです。必要なものだけ「クラウドへ復元」してください。"),
         Object.keys(items).map(k => items[k].orphans ? E("div", { key: k }, E("div", { style: { fontSize: 12, fontWeight: 600, margin: "6px 0 2px" } }, itemLabel[k] + " " + items[k].orphans + "件"), orphanRows(k)) : null)),
+      // 同じ行の同時編集（上書き）の履歴
+      E(ConflictSection, { cases: cases || [], horses: horses || [], setCases: setCases }),
       // 操作ボタン
       E("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 } },
         E("button", { className: "btn btn-secondary btn-sm", onClick: () => { startFirestoreListeners(); force(x => x + 1); } }, "📡 再接続（再購読）"),
         E("button", { className: "btn btn-secondary btn-sm", onClick: () => { retryFailedWrites(); Object.keys(items).forEach(k => retryItemFailed(k)); force(x => x + 1); }, disabled: failedCount === 0 && failedTotal === 0 }, "🔁 失敗分を再送"),
         blockedCount > 0 && E("button", { className: "btn btn-warning btn-sm", onClick: () => {
           if (confirm("上書き保護を60秒間解除し、保留中のマスタ等をFirebaseへ今すぐ書き込みます。よろしいですか？")) { allowWritesNow(60); force(x => x + 1); }
-        } }, "🔓 保留中のマスタを今すぐ書き込む")),
+        } }, "🔓 保留中のマスタを今すぐ書き込む"),
+        Object.keys(items).every(k => items[k].migrated) && E("button", { className: "btn btn-secondary btn-sm", title: "移行前の一括保存データ（clinicData/cases・cases_chunk_*・horses・farms）を削除します。全端末が新しい版になってから使ってください", onClick: () => {
+          if (!confirm("移行前の一括保存データ（clinicData の cases / cases_chunk_* / horses / farms）を Firebase から削除します。\n・全端末が新しい版（同期パネルに『1件ずつ同期』の表がある版）になっていることを確認してください。\n・日次バックアップ（backups）は残ります。\nよろしいですか？")) return;
+          retireLegacyDocs().then(n => { alert("旧データ " + n + " 件を削除しました。"); force(x => x + 1); }).catch(e => alert("削除エラー: " + (e.message || e)));
+        } }, "🗑 移行前の旧データを削除")),
       // データ整合性
       E(IntegritySection, { horses: horses || [], farms: farms || [], cases: cases || [], setHorses: setHorses, setCases: setCases }),
       // その他の項目（従来方式）
@@ -11808,7 +11938,7 @@ function SyncBanner({ onOpen }) {
   const failedDocs = Object.keys(_failedWrites);
   const offline = !navigator.onLine;
   const msg = []; let bg = "#fef3c7", border = "#f59e0b", color = "#78350f";
-  if (migrating.length) { msg.push("🔄 " + migrating.map(k => (k === "cases" ? "カルテ" : "馬")).join("・") + "を新しい保存方式へ移行中 " + migrating.map(k => items[k].migrating.phase === "write" ? items[k].migrating.done + "/" + items[k].migrating.total : "…").join(" ")); bg = "#dbeafe"; border = "#3b82f6"; color = "#1e3a8a"; }
+  if (migrating.length) { msg.push("🔄 " + migrating.map(k => ITEM_LABELS[k] || k).join("・") + "を新しい保存方式へ移行中 " + migrating.map(k => items[k].migrating.phase === "write" ? items[k].migrating.done + "/" + items[k].migrating.total : "…").join(" ")); bg = "#dbeafe"; border = "#3b82f6"; color = "#1e3a8a"; }
   if (offline) msg.push("📴 オフライン — 入力はこの端末に保持され、通信が戻ると自動で送信されます" + (pending ? "（未送信 " + pending + " 件）" : ""));
   else if (pending) msg.push("⏳ 未送信 " + pending + " 件を送信中…");
   if (failed) { msg.push("❌ カルテ・馬の送信 " + failed + " 件がエラー"); bg = "#fee2e2"; border = "#ef4444"; color = "#7f1d1d"; }
@@ -11957,7 +12087,6 @@ function App() {
     if (!FIREBASE_ENABLED) return;
     // 各データのリモート更新コールバックを登録
     // ピンポン防止は _skipNextWrite フラグで firestoreWrite 側で制御
-    registerRemoteUpdateCallback("farms", function(d) { setFarms(d); });
     registerRemoteUpdateCallback("drugsMaster", function(d) { setDrugsMaster(migrateDrugsMaster(d, cases)); });
     registerRemoteUpdateCallback("treatmentsMaster", function(d) { setTreatmentsMaster(d); });
     registerRemoteUpdateCallback("breedingTreatments", function(d) { setBreedingTreatments(d); INIT_BREEDING_TREATMENTS = d; });
@@ -11985,6 +12114,7 @@ function App() {
     const dropIds = (setter) => (ids) => { const del = new Set((ids || []).map(String)); setter(prev => prev.filter(x => !del.has(String(x && x.id)))); };
     registerItemSync("cases", mergeItems(setCases), dropIds(setCases));
     registerItemSync("horses", mergeItems(setHorses), dropIds(setHorses));
+    registerItemSync("farms", mergeItems(setFarms), dropIds(setFarms));
     // 古い編集コピーで保存したカルテに、他端末の行を補完
     registerItemPatch("cases", (patches) => setCases(prev => prev.map(c => {
       const pt = patches.find(x => String(x.id) === String(c.id));
@@ -12018,7 +12148,7 @@ function App() {
   }, [farms, horses, drugsMaster, treatmentsMaster, cases, payments, currentVet, vets, closedMonths, billingActual, breedingTreatments, purchaseHistory, insuranceList, memos]);
 
   // Firebase同期: 各データ項目を個別に監視・書き込み（他の項目を巻き込まない）
-  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("farms", farms); }, [farms]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) syncItemsFromState("farms", farms); }, [farms]);
   React.useEffect(() => { if (FIREBASE_ENABLED) syncItemsFromState("horses", horses); }, [horses]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("drugsMaster", drugsMaster); }, [drugsMaster]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("treatmentsMaster", treatmentsMaster); }, [treatmentsMaster]);
@@ -12031,7 +12161,7 @@ function App() {
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("memos", memos); }, [memos]);
   // Claude（Cowork）がメモをカルテ化するための入口（ログイン済みの本番画面でのみ使う）
-  React.useEffect(() => { window.__emr = { saveCase, setCases, setHorses, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos, vets, currentVet}), newRecordId, newRowId, getSyncReport }; });
+  React.useEffect(() => { window.__emr = { saveCase, setCases, setHorses, setFarms, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos, vets, currentVet}), newRecordId, newRowId, getSyncReport }; });
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
   // currentVet（獣医師（現在））は端末ごとの設定 → 同期しない（localStorage のみ）
 
@@ -13466,6 +13596,7 @@ function App() {
             type: c.type,
             vet: da.vet || c.vet || "佐藤",
             farmName: f?.name || "不明",
+            billFarm: ((c.farmId ? farms.find(x => x.id === c.farmId) : null) || f || {}).name || "不明",   // 請求先（カルテの牧場を優先・請求一覧と同じ帰属）
             farmId: f?.id,
             diagnosis: c.diagnosis || "",
             horseId: c.horseId,
@@ -13707,7 +13838,29 @@ function App() {
               E("td", {style:{padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "年計"),
               vetRanking.map(([vet, amt]) => E("td", {key:vet, style:{textAlign:"right", padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "¥" + amt.toLocaleString())),
               E("td", {style:{textAlign:"right", padding:"6px 8px", fontWeight:700, borderTop:"2px solid #e5e7eb"}}, "¥" + yearTotal.toLocaleString()))))),
-        E("div", {style:{fontSize:11, color:"#6b7280", marginTop:6}}, "※ 来院行・所見行ごとの担当獣医師で集計（担当が未記録の行はカルテの獣医師）。税抜"))),
+        E("div", {style:{fontSize:11, color:"#6b7280", marginTop:6}}, "※ 来院行・所見行ごとの担当獣医師で集計（担当が未記録の行はカルテの獣医師）。税抜"),
+        // 牧場 × 獣医師（請求先の牧場で集計・金額の多い順）
+        (() => {
+          const vets = vetRanking.map(([v]) => v);
+          const fm = {};
+          yearAmounts.forEach(x => { const k = x.billFarm || "不明"; fm[k] = fm[k] || {}; fm[k][x.vet] = (fm[k][x.vet] || 0) + x.amount; });
+          const rowsF = Object.keys(fm).map(k => ({ k, v: fm[k], t: vets.reduce((s, v) => s + (fm[k][v] || 0), 0) })).filter(r => r.t).sort((a, b) => b.t - a.t);
+          const cell = { textAlign: "right", padding: "5px 8px", borderBottom: "1px solid #f3f4f6" };
+          return E("div", {style:{marginTop:16}},
+            E("div", {style:{fontWeight:700, fontSize:13, marginBottom:6}}, "牧場別 × 獣医師別（" + rptYear + "年・税抜）"),
+            E("div", {style:{overflowX:"auto", maxHeight:420, overflowY:"auto"}},
+              E("table", {style:{width:"100%", borderCollapse:"collapse", fontSize:12}},
+                E("thead", null, E("tr", null,
+                  E("th", {style:{textAlign:"left", padding:"6px 8px", borderBottom:"2px solid #e5e7eb", position:"sticky", top:0, background:"#fff"}}, "牧場"),
+                  vets.map(v => E("th", {key:v, style:{textAlign:"right", padding:"6px 8px", borderBottom:"2px solid #e5e7eb", position:"sticky", top:0, background:"#fff"}}, v)),
+                  E("th", {style:{textAlign:"right", padding:"6px 8px", borderBottom:"2px solid #e5e7eb", position:"sticky", top:0, background:"#fff"}}, "合計"),
+                  E("th", {style:{textAlign:"right", padding:"6px 8px", borderBottom:"2px solid #e5e7eb", position:"sticky", top:0, background:"#fff"}}, vets[0] ? vets[0] + "の割合" : ""))),
+                E("tbody", null, rowsF.map(r => E("tr", {key:r.k},
+                  E("td", {style:{padding:"5px 8px", borderBottom:"1px solid #f3f4f6"}}, r.k),
+                  vets.map(v => E("td", {key:v, style:cell}, r.v[v] ? "¥" + r.v[v].toLocaleString() : "—")),
+                  E("td", {style:Object.assign({}, cell, {fontWeight:600})}, "¥" + r.t.toLocaleString()),
+                  E("td", {style:Object.assign({}, cell, {color:"#6b7280"})}, vets[0] ? Math.round((r.v[vets[0]] || 0) / r.t * 100) + "%" : "")))))));
+        })())),
       // ── 病名別 ──
       rptTab === "diag" && card("病名別売上", E("div", null,
         diagRanking.length === 0 ? E("p", {style:{color:"#9ca3af",fontSize:13}}, "一般診療の病名データがありません") :
@@ -13969,7 +14122,7 @@ function App() {
     }
   }, FIREBASE_ENABLED && /*#__PURE__*/React.createElement(SyncBanner, { onOpen: () => setShowSyncPanel(true) }),
      /*#__PURE__*/React.createElement("div", { style: { padding: 24 } }, renderPage())),
-  showSyncPanel && /*#__PURE__*/React.createElement(SyncPanel, { onClose: () => setShowSyncPanel(false), tick: syncTick, horses: horses, farms: farms, cases: cases, setHorses: setHorses, setCases: setCases }), showNewHorse && /*#__PURE__*/React.createElement(NewHorseModal, {
+  showSyncPanel && /*#__PURE__*/React.createElement(SyncPanel, { onClose: () => setShowSyncPanel(false), tick: syncTick, horses: horses, farms: farms, cases: cases, setHorses: setHorses, setCases: setCases, setFarms: setFarms }), showNewHorse && /*#__PURE__*/React.createElement(NewHorseModal, {
     farms: farms,
     onSave: h => {
       setHorses(p => [...p, h]);
