@@ -12642,7 +12642,8 @@ function App() {
 
   const counts = {
     continu: cases.filter(c => c.type === "一般" && c.caseStatus === "継続中").length,
-    breeding: cases.filter(c => c.type === "繁殖" && c.caseStatus === "継続中").length
+    // 2026-11-09 院長指示: 過去シーズンのカルテは重複なので数えない（今シーズンの繁殖牝馬の頭数を表示）
+    breeding: cases.filter(c => c.type === "繁殖" && !c.archived && c.caseStatus === "継続中" && breedingSeasonOf(c) === Number(todayJST().slice(0, 4))).length
   };
   const openCase = c => {
     setEditingCase(c);
