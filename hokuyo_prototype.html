@@ -2212,8 +2212,21 @@ function normalizeDrug(d){
 // 薬品マスターの移行: 新INIT_DRUGS(FM薬剤マスター準拠)を正とし、旧マスターだけにある薬品はカルテで使用中のものだけ残す
 function migrateDrugsMaster(list, cases){
   if (!Array.isArray(list)) return INIT_DRUGS.slice();
-  var isNew = list.length > 0 && list.every(function(d){ return d && d.category != null && d.active != null; });
-  if (isNew) return list.map(function(d){ return normalizeDrug(d); });
+  // 2026-11-11: 1件でも項目(category/active)の欠けた薬があると全体を初期マスタで作り直していたため、
+  //   アプリで登録・編集した薬（棚卸・名前・単価）が消える事故が起きた。大半が新形式なら新形式として扱い、
+  //   欠けた項目は normalizeDrug で補う（ID の無いものには ID を振る）
+  var _valid = list.filter(function(d){ return d && typeof d === "object"; });
+  var _newCount = _valid.filter(function(d){ return d.category != null && d.active != null; }).length;
+  var isNew = _valid.length > 0 && _newCount >= Math.max(1, Math.ceil(_valid.length * 0.8));
+  if (isNew) {
+    var _ids = new Set(); var _seq = Date.now();
+    return _valid.map(function(d){
+      var e = normalizeDrug(d);
+      if (e.id == null || e.id === "" || _ids.has(e.id)) { while (_ids.has(_seq)) _seq++; e.id = _seq++; }
+      _ids.add(e.id);
+      return e;
+    });
+  }
   var used = new Set();
   (cases || []).forEach(function(c){
     (c.visits || []).forEach(function(v){ (v.drugs || []).forEach(function(r){ used.add(Number(r.drugId)); }); });
@@ -8892,10 +8905,35 @@ function reconResolveId(id, byId) {
   return cur;
 }
 // 棚卸の記録: drug.stockCounts {"YYYY-MM-DD": 数（マスター単位）}。その日の終わりの数として扱う。"YYYY" だけのキーは年末
+//   2026-11-11: 往診車の在庫 drug.carStock {"黒オデッセイ": {"YYYY-MM-DD": 数}} を薬室とは別に持つ。
+//   棚卸の数(n)は 薬室＋車 の合計（理論在庫は合計で比べる）。room＝薬室、cars＝車ごとの数
+var RECON_CAR_ORDER = ["黒オデッセイ", "白オデッセイ"];
+function reconCarNames(drugs) {
+  var set = {}; (drugs || []).forEach(function(d){ if (d && d.carStock) Object.keys(d.carStock).forEach(function(c){ set[c] = true; }); });
+  var names = RECON_CAR_ORDER.filter(function(c){ return set[c]; });
+  Object.keys(set).sort().forEach(function(c){ if (names.indexOf(c) < 0) names.push(c); });
+  return names;
+}
 function reconCountList(d) {
-  var sc = (d && d.stockCounts) || {};
-  return Object.keys(sc).map(function(k){ return {key: k, date: /^\d{4}$/.test(k) ? k + "-12-31" : k, n: Number(sc[k])}; })
-    .filter(function(x){ return !isNaN(x.n); }).sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  var sc = (d && d.stockCounts) || {}; var cs = (d && d.carStock) || {};
+  var keys = {}; Object.keys(sc).forEach(function(k){ keys[k] = true; });
+  Object.keys(cs).forEach(function(c){ Object.keys(cs[c] || {}).forEach(function(k){ keys[k] = true; }); });
+  return Object.keys(keys).map(function(k){
+    var room = sc[k] != null && sc[k] !== "" ? Number(sc[k]) : null;
+    var cars = {}; var carSum = 0;
+    Object.keys(cs).forEach(function(c){ var v = cs[c] && cs[c][k]; if (v != null && v !== "" && !isNaN(Number(v))) { cars[c] = Number(v); carSum += Number(v); } });
+    var n = (room != null && !isNaN(room) ? room : 0) + carSum;
+    return {key: k, date: /^\d{4}$/.test(k) ? k + "-12-31" : k, n: reconR(n), room: (room != null && !isNaN(room)) ? room : null, cars: cars};
+  }).filter(function(x){ return !isNaN(x.n) && (x.room != null || Object.keys(x.cars).length); })
+    .sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+}
+function reconBreakdown(d, c) {
+  if (!c) return "";
+  var cs = reconCountSize(d), cu = reconCountUnit(d);
+  var f = function(v){ return reconFmtN(v / cs) + cu; };
+  var parts = []; if (c.room != null) parts.push("薬室 " + f(c.room));
+  Object.keys(c.cars || {}).forEach(function(k){ parts.push(k.replace("オデッセイ", "") + " " + f(c.cars[k])); });
+  return parts.join("・");
 }
 // a の翌日〜b までの 仕入−販売（マスター単位）
 function reconFlow(e, a, b) {
@@ -9159,13 +9197,13 @@ function PurchaseReconcileView({purchaseHistory, drugsMaster, cases, horses, far
           E("span", {style: {color: "#6b7280", fontSize: 12}}, d.unit || "")),
         counts.length === 0 ? E("div", {style: {color: "#6b7280", fontSize: 12}}, "まだ棚卸がありません。棚卸の数を登録すると、その日を起点に「棚卸＋その後の仕入−販売＝理論在庫」を計算します。") :
         E("table", {style: {fontSize: 12}},
-          E("thead", null, E("tr", {style: {background: "#f3f4f6"}}, th("棚卸日"), th("実数", 1), th("前回からの理論", 1), th("差", 1), th(""))),
+          E("thead", null, E("tr", {style: {background: "#f3f4f6"}}, th("棚卸日"), th("実数（合計）", 1), th("内訳"), th("前回からの理論", 1), th("差", 1), th(""))),
           E("tbody", null, counts.map(function(c, i){
             var exp = i > 0 ? reconR(counts[i-1].n + reconFlow(ev[k], counts[i-1].date, c.date)) : null;
             var df = exp != null ? reconR(c.n - exp) : null;
-            return E("tr", {key: c.key}, E("td", null, c.date), tdR(reconFmtStock(d, c.n)), tdR(exp != null ? reconFmtStock(d, exp) : "—"),
+            return E("tr", {key: c.key}, E("td", null, c.date), tdR(reconFmtStock(d, c.n)), E("td", {style: {color: "#6b7280", whiteSpace: "nowrap"}}, reconBreakdown(d, c)), tdR(exp != null ? reconFmtStock(d, exp) : "—"),
               tdR(df != null ? (df > 0 ? "+" : "") + reconFmtN(df) : "", {color: df != null && Math.abs(df) > 0.001 ? red : "#059669", fontWeight: 700}),
-              E("td", null, E("button", {style: {background: "none", border: "none", color: "#ef4444", cursor: "pointer"}, title: "この棚卸を削除", onClick: function(){ var sc = Object.assign({}, d.stockCounts || {}); delete sc[c.key]; onUpdateDrug && onUpdateDrug(d.id, {stockCounts: sc}); }}, "✕")));
+              E("td", null, E("button", {style: {background: "none", border: "none", color: "#ef4444", cursor: "pointer"}, title: "この棚卸を削除（薬室・車とも）", onClick: function(){ var sc = Object.assign({}, d.stockCounts || {}); delete sc[c.key]; var cr = {}; Object.keys(d.carStock || {}).forEach(function(cn){ var m = Object.assign({}, d.carStock[cn]); delete m[c.key]; if (Object.keys(m).length) cr[cn] = m; }); onUpdateDrug && onUpdateDrug(d.id, {stockCounts: sc, carStock: cr}); }}, "✕")));
           })),
         ),
         sel.st && E("div", {style: {marginTop: 6}}, endD + " 時点の理論在庫 ", E("b", null, reconFmtStock(d, sel.st.theory)), E("span", {style: {color: "#6b7280"}}, "（" + sel.st.last.date + " の棚卸 " + reconFmtStock(d, sel.st.last.n) + " ＋その後の仕入−販売）"))),
@@ -9227,26 +9265,31 @@ function PurchaseReconcileView({purchaseHistory, drugsMaster, cases, horses, far
       if (search && !(d.name || "").toLowerCase().includes(search.toLowerCase())) return false;
       var e = ev[d.id];
       if (supplier && !(e && e.purchases.some(function(p){ return p.supplier === supplier; }))) return false;
-      if (!takeAll && !(d.stockCounts && Object.keys(d.stockCounts).length) && !(e && (e.purchases.some(function(p){ return p.date >= since; }) || e.sales.length))) return false;
+      if (!takeAll && !(d.stockCounts && Object.keys(d.stockCounts).length) && !(d.carStock && Object.keys(d.carStock).length) && !(e && (e.purchases.some(function(p){ return p.date >= since; }) || e.sales.length))) return false;
       return true;
     }).sort(function(a,b){ return (a.category || "").localeCompare(b.category || "", "ja") || (a.name || "").localeCompare(b.name || "", "ja"); });
     var done = list.filter(function(d){ return d.stockCounts && d.stockCounts[takeDate] != null; }).length;
+    var carNames = reconCarNames(drugsMaster);
+    var carAt = function(d, cn){ var v = d.carStock && d.carStock[cn] && d.carStock[cn][takeDate]; return v != null && v !== "" ? Number(v) : null; };
     return E("div", null,
       E("div", {style: {display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8, padding: "8px 12px", background: "#eef2ff", borderRadius: 8, fontSize: 13}},
         E("b", null, "📋 棚卸日"),
         E("input", {type: "date", className: "inp inp-sm", value: takeDate, onChange: function(e){ setTakeDate(e.target.value); }, style: {width: 140}}),
         E("span", {style: {color: "#374151"}}, "入力 " + done + " / " + list.length + "品目"),
         E("label", {style: {fontSize: 12, display: "flex", alignItems: "center", gap: 4}}, E("input", {type: "checkbox", checked: takeAll, onChange: function(){ setTakeAll(!takeAll); }}), "仕入・販売の無い薬も表示"),
-        E("span", {style: {color: "#6b7280", fontSize: 12}}, "その日の仕事が終わった時点の数を入れてください（朝に数えるときは前日の日付）。空欄にすると削除。区分・業者・薬品名の絞り込みが使えます。")),
+        E("span", {style: {color: "#6b7280", fontSize: 12}}, "その日の仕事が終わった時点の数を入れてください（朝に数えるときは前日の日付）。空欄にすると削除。入力欄は薬室の数です。車（往診車）の数は別に保存したものを表示し、理論在庫とは「合計」で比べます。")),
       list.length === 0 ? E("div", {style: {textAlign: "center", padding: 30, color: "#9ca3af"}}, "この条件で在庫を持つ薬はありません（区分を「全区分」にしてください）") :
       E("div", {style: {overflowX: "auto"}}, E("table", {style: {width: "100%", fontSize: 13}},
-        E("thead", null, E("tr", {style: {background: "#f9fafb"}}, th("薬品"), th("区分"), th("前回の棚卸"), th("理論在庫", 1), th("実数", 1), th("数える単位"), th("差", 1))),
+        E("thead", null, E.apply(null, ["tr", {style: {background: "#f9fafb"}}, th("薬品"), th("区分"), th("前回の棚卸"), th("理論在庫", 1), th("薬室", 1)].concat(carNames.map(function(cn){ return th(cn.replace("オデッセイ", ""), 1); })).concat([th("合計", 1), th("数える単位"), th("差", 1)]))),
         E("tbody", null, list.map(function(d){
           var e = ev[d.id]; var cs = reconCountSize(d); var cu = reconCountUnit(d);
           var pre = reconStockState(d, e, takeDate, true);   // 棚卸日より前の棚卸から見た理論在庫
           var cur = d.stockCounts && d.stockCounts[takeDate] != null ? Number(d.stockCounts[takeDate]) : null;
-          var df = (pre && cur != null) ? reconR(cur - pre.theory) : null;
-          return E("tr", {key: d.id, style: {background: cur != null ? (df != null && Math.abs(df) > 0.001 ? "#fef2f2" : "#f0fdf4") : ""}},
+          var carVals = carNames.map(function(cn){ return carAt(d, cn); });
+          var hasAny = cur != null || carVals.some(function(v){ return v != null; });
+          var total = hasAny ? reconR((cur || 0) + carVals.reduce(function(a, v){ return a + (v || 0); }, 0)) : null;
+          var df = (pre && total != null) ? reconR(total - pre.theory) : null;
+          return E.apply(null, ["tr", {key: d.id, style: {background: hasAny ? (df != null && Math.abs(df) > 0.001 ? "#fef2f2" : "#f0fdf4") : ""}},
             E("td", {style: {fontWeight: 600}}, d.name, E("span", {style: {color: "#9ca3af", fontWeight: 400, marginLeft: 4}}, "(" + d.id + ")")),
             E("td", {style: {color: "#6b7280"}}, d.category || ""),
             E("td", {style: {color: "#6b7280", whiteSpace: "nowrap"}}, pre ? pre.last.date.substring(5).replace("-", "/") + " " + reconFmtN(pre.last.n / cs) + cu : "—"),
@@ -9254,9 +9297,12 @@ function PurchaseReconcileView({purchaseHistory, drugsMaster, cases, horses, far
             E("td", {style: {textAlign: "right"}}, E("input", {type: "number", step: "any", min: 0, key: "t" + d.id + takeDate + (cur == null ? "" : cur), defaultValue: cur != null ? reconR(cur / cs) : "",
               onBlur: function(ev2){ setStockCount(d, takeDate, ev2.target.value); },
               onKeyDown: function(ev2){ if (ev2.key === "Enter") ev2.target.blur(); },
-              style: {width: 80, textAlign: "right", padding: "3px 6px", border: "1px solid #d1d5db", borderRadius: 4}})),
+              style: {width: 80, textAlign: "right", padding: "3px 6px", border: "1px solid #d1d5db", borderRadius: 4}}))]
+            .concat(carVals.map(function(v, ci){ return tdR(v != null ? reconFmtN(v / cs) : "", {color: "#374151"}); }))
+            .concat([
+            tdR(total != null ? reconFmtN(total / cs) : "", {fontWeight: 700}),
             E("td", {style: {whiteSpace: "nowrap"}}, cu, cs > 1 ? E("span", {style: {color: "#9ca3af", fontSize: 11}}, "（1" + cu + "＝" + cs + d.unit + "）") : null),
-            tdR(df != null ? (df > 0 ? "+" : "") + reconFmtN(df / cs) + cu : "", {color: df != null && Math.abs(df) > 0.001 ? red : "#059669", fontWeight: 700}));
+            tdR(df != null ? (df > 0 ? "+" : "") + reconFmtN(df / cs) + cu : "", {color: df != null && Math.abs(df) > 0.001 ? red : "#059669", fontWeight: 700})]));
         })))));
   }
 
@@ -13370,7 +13416,7 @@ function App() {
           cases: cases,
           horses: horses,
           farms: farms,
-          onRegisterDrug: function(drugData) { setDrugsMaster(function(p) { return p.concat([drugData]); }); },
+          onRegisterDrug: function(drugData) { setDrugsMaster(function(p) { var e = normalizeDrug(drugData); if (e.id == null || p.some(function(x){ return x.id === e.id; })) e.id = Date.now(); return p.concat([e]); }); },
           onUpdateDrug: function(id, updates) { setDrugsMaster(function(p) { return p.map(function(x){ return x.id === id ? Object.assign({}, x, updates) : x; }); }); }
         });
       case "reports":
