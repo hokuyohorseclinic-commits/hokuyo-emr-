@@ -8871,8 +8871,461 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
   );
 }
 
+// ═══════════════ 仕入と販売の照合 ═══════════════
+// 仕入（purchaseHistory: 紐づけ済みの商品行、本数＝qty×packQty）とカルテの販売（一般 visits[].drugs／薬事 pharmaItems、単品は dose×packSize）を薬ごとに突き合わせる。
+// 在庫を持たない薬（受注分だけ注文）は差が出たら赤。在庫を持つ薬は 棚卸（日付つき）＋その後の仕入−販売＝理論在庫、次の棚卸との差を見る。
+// 照合の詳細：注文1件ごとに、同じ本数のカルテ販売を注文日の7日前〜31日後から対応付け（1件で一致→なければ複数の合計で一致）。
+var RECON_WIN_BEFORE = 7, RECON_WIN_AFTER = 31;
+function reconDays(a, b) { return Math.round((Date.parse(a) - Date.parse(b)) / 86400000); }
+function reconR(v) { return Math.round((Number(v) || 0) * 100) / 100; }
+function reconFmtN(v) { var n = reconR(v); return n.toLocaleString(); }
+// 在庫区分: drug.stockMode（"order"＝在庫なし・受注分だけ注文／"stock"＝在庫あり）。未設定なら 駆虫薬（Oxfendoate を除く）だけ「在庫なし」
+function reconDrugMode(d) {
+  if (!d) return "stock";
+  if (d.stockMode === "order" || d.stockMode === "stock") return d.stockMode;
+  return (d.category === "駆虫薬" && !/oxfendo/i.test(d.name || "")) ? "order" : "stock";
+}
+// 統合済み（mergedInto）の薬品IDを統合先へたどる
+function reconResolveId(id, byId) {
+  var cur = Number(id), n = 0;
+  while (byId[cur] && byId[cur].mergedInto && n < 6) { cur = Number(byId[cur].mergedInto); n++; }
+  return cur;
+}
+// 棚卸の記録: drug.stockCounts {"YYYY-MM-DD": 数（マスター単位）}。その日の終わりの数として扱う。"YYYY" だけのキーは年末
+function reconCountList(d) {
+  var sc = (d && d.stockCounts) || {};
+  return Object.keys(sc).map(function(k){ return {key: k, date: /^\d{4}$/.test(k) ? k + "-12-31" : k, n: Number(sc[k])}; })
+    .filter(function(x){ return !isNaN(x.n); }).sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+}
+// a の翌日〜b までの 仕入−販売（マスター単位）
+function reconFlow(e, a, b) {
+  if (!e) return 0; var f = 0;
+  e.purchases.forEach(function(p){ if (p.date > a && p.date <= b) f += p.units; });
+  e.sales.forEach(function(s){ if (s.date > a && s.date <= b) f -= s.units; });
+  return f;
+}
+// 数える単位: drug.countSize＝1数える単位がマスター単位いくつ（100mL瓶なら100）。未設定なら単品の packSize
+function reconCountSize(d) { return Number(d && d.countSize) || (Number(d && d.packSize) > 1 ? Number(d.packSize) : 1); }
+function reconCountUnit(d) { if (!d) return ""; if (d.countUnit) return d.countUnit; return reconCountSize(d) > 1 ? ((d.packUnit && d.packUnit !== d.unit) ? d.packUnit : "本") : (d.unit || ""); }
+function reconFmtStock(d, n) { var cs = reconCountSize(d); return reconFmtN(n) + (d.unit || "") + (cs > 1 ? "（" + reconFmtN(n / cs) + reconCountUnit(d) + "）" : ""); }
+// asOf 時点の在庫: 最新の棚卸＋その後の仕入−販売。棚卸が2回以上あれば、前回棚卸から見た差（実数−理論）も出す
+function reconStockState(d, e, asOf, beforeOnly) {
+  var cl = reconCountList(d).filter(function(c){ return beforeOnly ? c.date < asOf : c.date <= asOf; });
+  if (!cl.length) return null;
+  var last = cl[cl.length - 1], st = {last: last, theory: reconR(last.n + reconFlow(e, last.date, asOf))};
+  if (cl.length > 1) { var prev = cl[cl.length - 2]; st.prev = prev; st.expected = reconR(prev.n + reconFlow(e, prev.date, last.date)); st.diff = reconR(last.n - st.expected); }
+  return st;
+}
+// 仕入・販売のイベントを薬品IDごとに集める
+function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
+  var byId = {}; (drugsMaster || []).forEach(function(d){ byId[d.id] = d; });
+  var horseById = {}; (horses || []).forEach(function(h){ horseById[h.id] = h; });
+  var farmById = {}; (farms || []).forEach(function(f){ farmById[f.id] = f; });
+  var ev = {}; var unlinked = [];
+  var get = function(id){ return ev[id] || (ev[id] = {purchases: [], sales: []}); };
+  (purchaseHistory || []).forEach(function(r) {
+    if (r.kind && r.kind !== "商品") return;
+    if (!r.date) return;
+    if (!r.drugId) { unlinked.push(r); return; }
+    var id = reconResolveId(r.drugId, byId);
+    var units = (Number(r.qty) || 0) * (Number(r.packQty) || 1);
+    get(id).purchases.push({date: r.date, units: units, amount: Number(r.landed) || Number(r.amount) || 0, supplier: r.supplier || "", slipNo: r.slipNo || r.invoiceNo || "", name: r.name || "", spec: r.spec || "", qty: Number(r.qty) || 0, packQty: Number(r.packQty) || 1, rid: r.id});
+  });
+  var minCase = "";
+  (cases || []).forEach(function(c) {
+    if (!c || c.draft || c._deleted) return;
+    var h = horseById[c.horseId];
+    var fid = c.farmId || (h ? h.farmId : null);
+    var f = farmById[fid];
+    var base = {caseId: c.id, type: c.type, horseName: h ? h.name : (c.horseName || ""), farmName: f ? f.name : ""};
+    var push = function(drugId, date, dose, useRx, amount) {
+      if (drugId == null || drugId === "" || !date) return;
+      var id = reconResolveId(drugId, byId); var d = byId[id];
+      var units = (Number(dose) || 0) * (useRx ? (Number(d && d.packSize) || 1) : 1);
+      if (!units) return;
+      if (!minCase || date < minCase) minCase = date;
+      get(id).sales.push(Object.assign({date: date, units: units, amount: amount, useRx: !!useRx}, base));
+    };
+    if (c.type === "薬事") {
+      var dd = c.openDate || c.date || "";
+      (c.pharmaItems || []).forEach(function(pi){ push(pi.drugId, dd, pi.dose != null ? pi.dose : pi.qty, pi.useRx, Number(pi.price) || 0); });
+    } else {
+      (c.visits || []).forEach(function(v) {
+        var vd = v.date || c.openDate || "";
+        (v.drugs || []).forEach(function(r){
+          var d = byId[reconResolveId(r.drugId, byId)];
+          var amt = r.fee != null ? Number(r.fee) || 0 : (d ? calcDrugLine(d, r.dose, r.useRx) : 0);
+          push(r.drugId, vd, r.dose, r.useRx, amt);
+        });
+      });
+    }
+  });
+  Object.keys(ev).forEach(function(k){ ev[k].purchases.sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }); ev[k].sales.sort(function(a,b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; }); });
+  return {ev: ev, byId: byId, unlinked: unlinked, minCase: minCase};
+}
+// 注文と販売の対応付け。orders/sales は日付順。返り値 {matches:[{order, sales, status}], unmatchedSales}
+function reconMatch(orders, sales) {
+  var used = new Array(sales.length).fill(false);
+  var res = orders.map(function(o){ return {order: o, sales: [], status: "販売なし"}; });
+  var inWin = function(o, s){ var dd = reconDays(s.date, o.date); return dd >= -RECON_WIN_BEFORE && dd <= RECON_WIN_AFTER; };
+  var prox = function(o, s){ var dd = reconDays(s.date, o.date); return dd >= 0 ? dd : -dd + 0.5; };   // 同じ距離なら注文後の販売を優先
+  // 1) 同じ本数の販売1件
+  res.forEach(function(m) {
+    var o = m.order; if (o.units <= 0) return;
+    var best = -1, bp = 1e9;
+    for (var i = 0; i < sales.length; i++) {
+      if (used[i] || !inWin(o, sales[i]) || reconR(sales[i].units) !== reconR(o.units)) continue;
+      var p = prox(o, sales[i]); if (p < bp) { bp = p; best = i; }
+    }
+    if (best >= 0) { used[best] = true; m.sales = [sales[best]]; m.status = "一致"; }
+  });
+  // 2) 複数の販売の合計で一致（近い順に最大16件から部分和）
+  res.forEach(function(m) {
+    if (m.status !== "販売なし") return;
+    var o = m.order; if (o.units <= 0) return;
+    var target = Math.round(o.units * 100);
+    var cand = [];
+    for (var i = 0; i < sales.length; i++) { if (!used[i] && inWin(o, sales[i]) && sales[i].units > 0 && sales[i].units <= o.units) cand.push(i); }
+    cand.sort(function(a,b){ return prox(o, sales[a]) - prox(o, sales[b]); });
+    cand = cand.slice(0, 16);
+    if (!cand.length) return;
+    var reach = {0: []};
+    for (var ci = 0; ci < cand.length && !reach[target]; ci++) {
+      var u = Math.round(sales[cand[ci]].units * 100);
+      var keys = Object.keys(reach).map(Number);
+      for (var ki = 0; ki < keys.length; ki++) {
+        var s2 = keys[ki] + u;
+        if (s2 <= target && !reach[s2]) reach[s2] = reach[keys[ki]].concat([cand[ci]]);
+      }
+    }
+    if (reach[target] && reach[target].length) {
+      reach[target].forEach(function(i){ used[i] = true; });
+      m.sales = reach[target].map(function(i){ return sales[i]; }).sort(function(a,b){ return a.date < b.date ? -1 : 1; });
+      m.status = "合計一致";
+    } else {
+      m.near = cand.reduce(function(a, i){ return a + sales[i].units; }, 0);   // 期間内にあった未対応の販売（参考）
+    }
+  });
+  return {matches: res, unmatchedSales: sales.filter(function(s, i){ return !used[i]; })};
+}
+
+function PurchaseReconcileView({purchaseHistory, drugsMaster, cases, horses, farms, onUpdateDrug, onGoLink}) {
+  var E = React.createElement;
+  var built = useMemo(function(){ return reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms); }, [purchaseHistory, drugsMaster, cases, horses, farms]);
+  var ev = built.ev, byId = built.byId;
+  var thisYear = todayJST().substring(0, 4);
+  var [year, setYear] = useState(thisYear);
+  var [month, setMonth] = useState("");
+  var [category, setCategory] = useState("駆虫薬");
+  var [supplier, setSupplier] = useState("");
+  var [search, setSearch] = useState("");
+  var [onlyDiff, setOnlyDiff] = useState(false);
+  var [selId, setSelId] = useState(null);
+  var [showOk, setShowOk] = useState(false);
+  var [take, setTake] = useState(false);            // 棚卸入力モード
+  var [takeDate, setTakeDate] = useState(todayJST());
+  var [takeAll, setTakeAll] = useState(false);      // 仕入・販売の無い薬も表示
+  var [cntVal, setCntVal] = useState("");
+
+  var salesStart = built.minCase ? built.minCase.substring(0, 7) + "-01" : "2025-01-01";
+  var years = useMemo(function(){
+    var y = {}; y[thisYear] = 1;
+    Object.keys(ev).forEach(function(k){ ev[k].purchases.concat(ev[k].sales).forEach(function(x){ if (x.date >= salesStart) y[x.date.substring(0,4)] = 1; }); });
+    return Object.keys(y).sort().reverse();
+  }, [ev, salesStart]);
+  var suppliers = useMemo(function(){ var s = {}; (purchaseHistory || []).forEach(function(r){ if (r.supplier) s[r.supplier] = 1; }); return Object.keys(s).sort(); }, [purchaseHistory]);
+  // 期間（全期間＝カルテのある月から）
+  var pStart, pEnd;
+  if (year === "all") { pStart = salesStart; pEnd = "9999-12-31"; }
+  else if (month) { pStart = year + "-" + month + "-01"; pEnd = year + "-" + month + "-31"; }
+  else { pStart = year + "-01-01"; pEnd = year + "-12-31"; }
+  if (pStart < salesStart) pStart = salesStart;
+  var inP = function(d){ return d >= pStart && d <= pEnd; };
+  var supOk = function(p){ return !supplier || p.supplier === supplier; };
+  var today = todayJST();
+  var endD = pEnd > today ? today : pEnd;      // 理論在庫はこの日の時点
+
+  // 在庫なしの薬の照合（全期間で対応付けてから期間で絞る）
+  var matchCache = useMemo(function(){
+    var m = {};
+    Object.keys(ev).forEach(function(k){
+      var d = byId[k]; if (reconDrugMode(d) !== "order") return;
+      var orders = ev[k].purchases.filter(function(p){ return p.date >= salesStart && supOk(p); });
+      m[k] = reconMatch(orders, ev[k].sales);
+    });
+    return m;
+  }, [ev, byId, salesStart, supplier]);
+
+  var rows = useMemo(function(){
+    var out = [];
+    Object.keys(ev).forEach(function(k){
+      var d = byId[k]; if (!d) return;
+      if (category && (d.category || "") !== category) return;
+      if (search && !(d.name || "").toLowerCase().includes(search.toLowerCase())) return;
+      var ps = ev[k].purchases.filter(function(p){ return inP(p.date) && supOk(p); });
+      var ss = ev[k].sales.filter(function(s){ return inP(s.date); });
+      if (!ps.length && !ss.length) return;
+      var pu = ps.reduce(function(a,p){ return a + p.units; }, 0), su = ss.reduce(function(a,s){ return a + s.units; }, 0);
+      var pa = ps.reduce(function(a,p){ return a + p.amount; }, 0), sa = ss.reduce(function(a,s){ return a + s.amount; }, 0);
+      var mode = reconDrugMode(d);
+      var r = {id: Number(k), d: d, mode: mode, pu: reconR(pu), su: reconR(su), diff: reconR(pu - su), pa: Math.round(pa), sa: Math.round(sa), nOrders: ps.length, nSales: ss.length};
+      if (mode === "order" && matchCache[k]) {
+        r.badOrders = matchCache[k].matches.filter(function(m){ return m.status === "販売なし" && inP(m.order.date); }).length;
+        r.freeSales = matchCache[k].unmatchedSales.filter(function(s){ return inP(s.date); }).length;
+        r.alert = Math.abs(r.diff) > 0.001 || r.badOrders > 0;
+        // 差の売値換算（仕入が多い分＝請求漏れの可能性）
+        r.diffYen = r.diff > 0 ? Math.round(r.diff * (Number(d.pricePerUnit) || 0)) : 0;
+      } else {
+        var st = reconStockState(d, ev[k], endD);
+        if (st) { r.st = st; r.theory = st.theory; if (st.diff != null) { r.stockDiff = st.diff; r.alert = Math.abs(st.diff) > 0.001; } }
+      }
+      if (onlyDiff && !r.alert) return;
+      out.push(r);
+    });
+    out.sort(function(a,b){ return (b.alert?1:0) - (a.alert?1:0) || (a.mode === b.mode ? 0 : a.mode === "order" ? -1 : 1) || (b.pa + b.sa) - (a.pa + a.sa); });
+    return out;
+  }, [ev, byId, category, search, pStart, pEnd, supplier, onlyDiff, matchCache, endD]);
+
+  var tot = rows.reduce(function(a,r){ a.pa += r.pa; a.sa += r.sa; a.diffYen += r.diffYen || 0; return a; }, {pa: 0, sa: 0, diffYen: 0});
+  var units = {}; rows.forEach(function(r){ units[r.d.unit || ""] = 1; });
+  var sameUnit = Object.keys(units).length === 1 ? Object.keys(units)[0] : null;
+  var unlinkedInP = built.unlinked.filter(function(r){ return inP(r.date) && supOk(r); });
+
+  function monthsOf(a, b) {
+    var out = []; var y = Number(a.substring(0,4)), m = Number(a.substring(5,7));
+    var endYm = b.substring(0,7) > todayJST().substring(0,7) ? todayJST().substring(0,7) : b.substring(0,7);
+    while (true) { var ym = y + "-" + String(m).padStart(2, "0"); if (ym > endYm) break; out.push(ym); m++; if (m > 12) { m = 1; y++; } if (out.length > 120) break; }
+    return out;
+  }
+  // 棚卸の保存（val は数える単位。マスター単位に換算して drug.stockCounts[date] へ）
+  function setStockCount(d, date, val) {
+    if (!onUpdateDrug || !date) return;
+    var sc = Object.assign({}, d.stockCounts || {});
+    var cur = sc[date];
+    if (val === "" || val == null) { if (cur == null) return; delete sc[date]; }
+    else { var n = reconR(Number(val) * reconCountSize(d)); if (isNaN(n) || cur === n) return; sc[date] = n; }
+    onUpdateDrug(d.id, {stockCounts: sc});
+  }
+  function downloadCsv(name, lines) {
+    var csv = "\ufeff" + lines.map(function(l){ return l.map(function(v){ var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(","); }).join("\n");
+    var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"})); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  }
+  var periodLabel = year === "all" ? "全期間（" + salesStart.substring(0,7) + "〜）" : year + "年" + (month ? Number(month) + "月" : "");
+
+  var th = function(t, right, extra){ return E("th", {style: Object.assign({textAlign: right ? "right" : "left", whiteSpace: "nowrap"}, extra || {})}, t); };
+  var tdR = function(v, st){ return E("td", {style: Object.assign({textAlign: "right", whiteSpace: "nowrap"}, st || {})}, v); };
+  var red = "#dc2626";
+
+  // ── 明細（選択した薬）──
+  var detail = null;
+  var sel = selId != null ? rows.find(function(r){ return r.id === selId; }) || (byId[selId] ? {id: selId, d: byId[selId], mode: reconDrugMode(byId[selId])} : null) : null;
+  if (sel && ev[sel.id]) {
+    var d = sel.d, k = sel.id;
+    var ps = ev[k].purchases.filter(function(p){ return inP(p.date) && supOk(p); });
+    var ss = ev[k].sales.filter(function(s){ return inP(s.date); });
+    var mos = monthsOf(pStart, pEnd);
+    var counts = reconCountList(d);
+    var hasCount = sel.mode === "stock" && counts.length > 0;
+    var cum = 0;
+    var monthRows = mos.map(function(ym){
+      var p = ps.filter(function(x){ return x.date.substring(0,7) === ym; }).reduce(function(a,x){ return a + x.units; }, 0);
+      var s = ss.filter(function(x){ return x.date.substring(0,7) === ym; }).reduce(function(a,x){ return a + x.units; }, 0);
+      cum += p - s;
+      return {ym: ym, p: reconR(p), s: reconR(s), diff: reconR(p - s), cum: reconR(cum)};
+    }).filter(function(r){ return r.p || r.s || year !== "all"; });
+    var mc = matchCache[k];
+    var mInP = mc ? mc.matches.filter(function(m){ return inP(m.order.date); }) : [];
+    var freeInP = mc ? mc.unmatchedSales.filter(function(s){ return inP(s.date); }) : [];
+    var shownMatches = showOk ? mInP : mInP.filter(function(m){ return m.status === "販売なし"; });
+    var saleLabel = function(s){ return s.date.substring(5) + " " + (s.farmName || "牧場?") + (s.horseName ? "・" + s.horseName : "") + " " + reconFmtN(s.units) + (s.type === "薬事" ? "（薬事）" : "") + (s.useRx ? "（単品）" : ""); };
+    detail = E("div", {style: {marginTop: 16, border: "1px solid #c7d2fe", borderRadius: 12, padding: 16, background: "#fafbff"}},
+      E("div", {style: {display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10}},
+        E("div", {style: {fontSize: 16, fontWeight: 700}}, d.name, E("span", {style: {fontSize: 12, color: "#6b7280", fontWeight: 400, marginLeft: 8}}, "（" + (d.category || "未分類") + "・単位 " + (d.unit || "") + (Number(d.packSize) > 1 ? "・単品1" + (d.packUnit || "本") + "＝" + d.packSize + d.unit : "") + "） " + periodLabel)),
+        E("div", {style: {display: "flex", gap: 6, alignItems: "center"}},
+          E("span", {style: {fontSize: 12, color: "#6b7280"}}, "在庫:"),
+          ["order", "stock"].map(function(mo){ var on = sel.mode === mo; return E("button", {key: mo, className: "btn btn-sm", style: {background: on ? "#1e40af" : "#e5e7eb", color: on ? "#fff" : "#374151", border: "none"}, onClick: function(){ if (!on && onUpdateDrug) onUpdateDrug(d.id, {stockMode: mo}); }}, mo === "order" ? "持たない（受注分だけ注文）" : "持つ（棚卸で確認）"); }),
+          E("button", {className: "btn btn-sm btn-secondary", onClick: function(){ setSelId(null); }}, "閉じる"))),
+      // 在庫ありの薬：棚卸の記録と入力
+      sel.mode === "stock" && E("div", {style: {fontSize: 13, marginBottom: 12, padding: "8px 12px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8}},
+        E("div", {style: {display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6}},
+          E("b", null, "棚卸"),
+          E("input", {type: "date", className: "inp inp-sm", value: takeDate, onChange: function(e){ setTakeDate(e.target.value); }, style: {width: 140}}),
+          E("span", null, "の終わりの数"),
+          E("input", {type: "number", step: "any", min: 0, value: cntVal, onChange: function(e){ setCntVal(e.target.value); }, style: {width: 80, textAlign: "right"}}),
+          E("span", null, reconCountUnit(d)),
+          E("button", {className: "btn btn-sm btn-primary", disabled: cntVal === "", onClick: function(){ setStockCount(d, takeDate, cntVal); setCntVal(""); }}, "登録"),
+          E("span", {style: {color: "#6b7280", fontSize: 12, marginLeft: 8}}, "数える単位 1" + reconCountUnit(d) + "＝"),
+          E("input", {type: "number", step: "any", defaultValue: reconCountSize(d), key: "cs" + d.id + reconCountSize(d), onBlur: function(e){ var v = Number(e.target.value) || 1; if (v !== reconCountSize(d) && onUpdateDrug) onUpdateDrug(d.id, {countSize: v, countUnit: reconCountUnit(d) === d.unit && v > 1 ? "本" : reconCountUnit(d)}); }, style: {width: 60, textAlign: "right"}}),
+          E("span", {style: {color: "#6b7280", fontSize: 12}}, d.unit || "")),
+        counts.length === 0 ? E("div", {style: {color: "#6b7280", fontSize: 12}}, "まだ棚卸がありません。棚卸の数を登録すると、その日を起点に「棚卸＋その後の仕入−販売＝理論在庫」を計算します。") :
+        E("table", {style: {fontSize: 12}},
+          E("thead", null, E("tr", {style: {background: "#f3f4f6"}}, th("棚卸日"), th("実数", 1), th("前回からの理論", 1), th("差", 1), th(""))),
+          E("tbody", null, counts.map(function(c, i){
+            var exp = i > 0 ? reconR(counts[i-1].n + reconFlow(ev[k], counts[i-1].date, c.date)) : null;
+            var df = exp != null ? reconR(c.n - exp) : null;
+            return E("tr", {key: c.key}, E("td", null, c.date), tdR(reconFmtStock(d, c.n)), tdR(exp != null ? reconFmtStock(d, exp) : "—"),
+              tdR(df != null ? (df > 0 ? "+" : "") + reconFmtN(df) : "", {color: df != null && Math.abs(df) > 0.001 ? red : "#059669", fontWeight: 700}),
+              E("td", null, E("button", {style: {background: "none", border: "none", color: "#ef4444", cursor: "pointer"}, title: "この棚卸を削除", onClick: function(){ var sc = Object.assign({}, d.stockCounts || {}); delete sc[c.key]; onUpdateDrug && onUpdateDrug(d.id, {stockCounts: sc}); }}, "✕")));
+          })),
+        ),
+        sel.st && E("div", {style: {marginTop: 6}}, endD + " 時点の理論在庫 ", E("b", null, reconFmtStock(d, sel.st.theory)), E("span", {style: {color: "#6b7280"}}, "（" + sel.st.last.date + " の棚卸 " + reconFmtStock(d, sel.st.last.n) + " ＋その後の仕入−販売）"))),
+      E("div", {style: {display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start"}},
+        // 月別
+        E("div", {style: {flex: "0 0 auto"}},
+          E("div", {style: {fontWeight: 700, fontSize: 13, marginBottom: 4}}, "月別"),
+          E("table", {style: {fontSize: 12}},
+            E("thead", null, E("tr", {style: {background: "#f3f4f6"}}, th("月"), th("仕入", 1), th("販売", 1), th("差", 1), th("累計差", 1), hasCount ? th("月末の理論在庫", 1) : null)),
+            E("tbody", null, monthRows.map(function(r){
+              var bad = sel.mode === "order" && Math.abs(r.diff) > 0.001;
+              return E("tr", {key: r.ym},
+                E("td", null, r.ym.replace("-", "/")), tdR(r.p ? reconFmtN(r.p) : ""), tdR(r.s ? reconFmtN(r.s) : ""),
+                tdR(r.diff ? (r.diff > 0 ? "+" : "") + reconFmtN(r.diff) : "", {color: bad ? red : "#374151", fontWeight: bad ? 700 : 400}),
+                tdR(reconFmtN(r.cum), {color: sel.mode === "order" && Math.abs(r.cum) > 0.001 ? red : "#6b7280"}),
+                hasCount ? tdR((function(){ var me = r.ym + "-31"; if (me > today) me = today; var st = reconStockState(d, ev[k], me); return st ? reconFmtN(st.theory) : ""; })()) : null);
+            })))),
+        // 注文ごとの照合
+        sel.mode === "order" ? E("div", {style: {flex: 1, minWidth: 380}},
+          E("div", {style: {display: "flex", alignItems: "center", gap: 10, marginBottom: 4}},
+            E("div", {style: {fontWeight: 700, fontSize: 13}}, "注文ごとの照合（注文日の" + RECON_WIN_BEFORE + "日前〜" + RECON_WIN_AFTER + "日後の同じ本数の販売）"),
+            E("label", {style: {fontSize: 12, color: "#6b7280"}}, E("input", {type: "checkbox", checked: showOk, onChange: function(){ setShowOk(!showOk); }}), " 一致した注文も表示")),
+          E("div", {style: {fontSize: 12, color: "#6b7280", marginBottom: 6}}, "注文 " + mInP.length + "件：一致 " + mInP.filter(function(m){ return m.status === "一致"; }).length + "・合計一致 " + mInP.filter(function(m){ return m.status === "合計一致"; }).length + "・", E("b", {style: {color: red}}, "販売なし " + mInP.filter(function(m){ return m.status === "販売なし"; }).length)),
+          E("div", {style: {maxHeight: 360, overflowY: "auto"}}, E("table", {style: {width: "100%", fontSize: 12}},
+            E("thead", null, E("tr", {style: {background: "#f3f4f6", position: "sticky", top: 0}}, th("注文日"), th("本数", 1), th("業者・伝票"), th("状態"), th("対応するカルテ販売"))),
+            E("tbody", null, shownMatches.length === 0 ? E("tr", null, E("td", {colSpan: 5, style: {color: "#059669", padding: 10}}, "販売の無い注文はありません")) : shownMatches.map(function(m, i){
+              var bad = m.status === "販売なし";
+              return E("tr", {key: i, style: {background: bad ? "#fef2f2" : ""}},
+                E("td", {style: {whiteSpace: "nowrap"}}, m.order.date), tdR(reconFmtN(m.order.units), {fontWeight: 700}),
+                E("td", {style: {color: "#6b7280"}}, m.order.supplier + (m.order.slipNo ? " " + m.order.slipNo : "")),
+                E("td", {style: {color: bad ? red : m.status === "合計一致" ? "#b45309" : "#059669", fontWeight: 700, whiteSpace: "nowrap"}}, m.status),
+                E("td", null, bad ? (m.near ? E("span", {style: {color: "#9ca3af"}}, "期間内の未対応の販売 計" + reconFmtN(m.near) + "（本数が合わない）") : "") : m.sales.map(function(s, j){ return E("div", {key: j}, saleLabel(s)); })));
+            })))),
+          E("div", {style: {fontWeight: 700, fontSize: 13, margin: "12px 0 4px"}}, "注文と対応しない販売 " + freeInP.length + "件", E("span", {style: {fontWeight: 400, color: "#6b7280", fontSize: 12}}, "（在庫からの販売・他の注文と合算・入力ミスの可能性）")),
+          freeInP.length > 0 && E("div", {style: {maxHeight: 240, overflowY: "auto"}}, E("table", {style: {width: "100%", fontSize: 12}},
+            E("thead", null, E("tr", {style: {background: "#f3f4f6"}}, th("日付"), th("牧場"), th("馬"), th("本数", 1), th("区分"), th("金額", 1))),
+            E("tbody", null, freeInP.map(function(s, i){ return E("tr", {key: i}, E("td", null, s.date), E("td", null, s.farmName), E("td", null, s.horseName), tdR(reconFmtN(s.units)), E("td", null, s.type + (s.useRx ? "・単品" : "")), tdR("¥" + Math.round(s.amount).toLocaleString())); })))),
+          E("button", {className: "btn btn-sm btn-secondary", style: {marginTop: 8}, onClick: function(){
+            var lines = [["注文日", "本数", "業者", "伝票", "状態", "対応する販売"]];
+            mInP.forEach(function(m){ lines.push([m.order.date, m.order.units, m.order.supplier, m.order.slipNo, m.status, m.sales.map(saleLabel).join(" / ")]); });
+            lines.push([]); lines.push(["対応しない販売"]); lines.push(["日付", "牧場", "馬", "本数", "区分", "金額"]);
+            freeInP.forEach(function(s){ lines.push([s.date, s.farmName, s.horseName, s.units, s.type, Math.round(s.amount)]); });
+            downloadCsv("照合_" + d.name + "_" + periodLabel + ".csv", lines);
+          }}, "⬇ この薬の照合をCSV")
+        ) : E("div", {style: {flex: 1, minWidth: 300, fontSize: 12, color: "#6b7280", lineHeight: 1.7}},
+          "在庫を持つ薬は注文とカルテが1対1にならないため、注文ごとの照合は行いません。棚卸の数を入れると「棚卸＋その後の仕入−販売＝理論在庫」を計算し、次の棚卸で差を見ます。",
+          E("div", {style: {marginTop: 8, fontWeight: 700, color: "#374151"}}, "期間内の仕入"),
+          ps.length === 0 ? "なし" : ps.map(function(p, i){ return E("div", {key: i}, p.date + " " + p.supplier + " " + p.name + (p.spec ? " " + p.spec : "") + " ×" + p.qty + (p.packQty !== 1 ? "（＝" + reconFmtN(p.units) + d.unit + "）" : "")); })))
+    );
+  }
+
+  // ── 棚卸入力（在庫を持つ薬の一覧に実数を入れる）──
+  function renderTake() {
+    var since = salesStart;
+    var list = (drugsMaster || []).filter(function(d){
+      if (d.archived || d.mergedInto) return false;
+      if (reconDrugMode(d) !== "stock") return false;
+      if (category && (d.category || "") !== category) return false;
+      if (search && !(d.name || "").toLowerCase().includes(search.toLowerCase())) return false;
+      var e = ev[d.id];
+      if (supplier && !(e && e.purchases.some(function(p){ return p.supplier === supplier; }))) return false;
+      if (!takeAll && !(d.stockCounts && Object.keys(d.stockCounts).length) && !(e && (e.purchases.some(function(p){ return p.date >= since; }) || e.sales.length))) return false;
+      return true;
+    }).sort(function(a,b){ return (a.category || "").localeCompare(b.category || "", "ja") || (a.name || "").localeCompare(b.name || "", "ja"); });
+    var done = list.filter(function(d){ return d.stockCounts && d.stockCounts[takeDate] != null; }).length;
+    return E("div", null,
+      E("div", {style: {display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8, padding: "8px 12px", background: "#eef2ff", borderRadius: 8, fontSize: 13}},
+        E("b", null, "📋 棚卸日"),
+        E("input", {type: "date", className: "inp inp-sm", value: takeDate, onChange: function(e){ setTakeDate(e.target.value); }, style: {width: 140}}),
+        E("span", {style: {color: "#374151"}}, "入力 " + done + " / " + list.length + "品目"),
+        E("label", {style: {fontSize: 12, display: "flex", alignItems: "center", gap: 4}}, E("input", {type: "checkbox", checked: takeAll, onChange: function(){ setTakeAll(!takeAll); }}), "仕入・販売の無い薬も表示"),
+        E("span", {style: {color: "#6b7280", fontSize: 12}}, "その日の仕事が終わった時点の数を入れてください（朝に数えるときは前日の日付）。空欄にすると削除。区分・業者・薬品名の絞り込みが使えます。")),
+      list.length === 0 ? E("div", {style: {textAlign: "center", padding: 30, color: "#9ca3af"}}, "この条件で在庫を持つ薬はありません（区分を「全区分」にしてください）") :
+      E("div", {style: {overflowX: "auto"}}, E("table", {style: {width: "100%", fontSize: 13}},
+        E("thead", null, E("tr", {style: {background: "#f9fafb"}}, th("薬品"), th("区分"), th("前回の棚卸"), th("理論在庫", 1), th("実数", 1), th("数える単位"), th("差", 1))),
+        E("tbody", null, list.map(function(d){
+          var e = ev[d.id]; var cs = reconCountSize(d); var cu = reconCountUnit(d);
+          var pre = reconStockState(d, e, takeDate, true);   // 棚卸日より前の棚卸から見た理論在庫
+          var cur = d.stockCounts && d.stockCounts[takeDate] != null ? Number(d.stockCounts[takeDate]) : null;
+          var df = (pre && cur != null) ? reconR(cur - pre.theory) : null;
+          return E("tr", {key: d.id, style: {background: cur != null ? (df != null && Math.abs(df) > 0.001 ? "#fef2f2" : "#f0fdf4") : ""}},
+            E("td", {style: {fontWeight: 600}}, d.name, E("span", {style: {color: "#9ca3af", fontWeight: 400, marginLeft: 4}}, "(" + d.id + ")")),
+            E("td", {style: {color: "#6b7280"}}, d.category || ""),
+            E("td", {style: {color: "#6b7280", whiteSpace: "nowrap"}}, pre ? pre.last.date.substring(5).replace("-", "/") + " " + reconFmtN(pre.last.n / cs) + cu : "—"),
+            tdR(pre ? reconFmtN(pre.theory / cs) + cu : "—", {color: "#6b7280"}),
+            E("td", {style: {textAlign: "right"}}, E("input", {type: "number", step: "any", min: 0, key: "t" + d.id + takeDate + (cur == null ? "" : cur), defaultValue: cur != null ? reconR(cur / cs) : "",
+              onBlur: function(ev2){ setStockCount(d, takeDate, ev2.target.value); },
+              onKeyDown: function(ev2){ if (ev2.key === "Enter") ev2.target.blur(); },
+              style: {width: 80, textAlign: "right", padding: "3px 6px", border: "1px solid #d1d5db", borderRadius: 4}})),
+            E("td", {style: {whiteSpace: "nowrap"}}, cu, cs > 1 ? E("span", {style: {color: "#9ca3af", fontSize: 11}}, "（1" + cu + "＝" + cs + d.unit + "）") : null),
+            tdR(df != null ? (df > 0 ? "+" : "") + reconFmtN(df / cs) + cu : "", {color: df != null && Math.abs(df) > 0.001 ? red : "#059669", fontWeight: 700}));
+        })))));
+  }
+
+  return E("div", null,
+    E("div", {style: {fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.6}},
+      "紐づけ済みの仕入（仕入本数＝数量×仕入1単位）とカルテの販売（一般・薬事、単品売りは単品単位に換算。AI下書きは除外）を薬ごとに比べます。",
+      "「在庫を持たない」薬は受注分だけ注文するので差が出たら赤、「在庫を持つ」薬は棚卸（右の「📋 棚卸入力」）で確認します。行をクリックすると月別と注文ごとの照合を表示します。"),
+    // 絞り込み
+    E("div", {style: {display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center"}},
+      E("select", {className: "inp inp-sm", value: year, onChange: function(e){ setYear(e.target.value); if (e.target.value === "all") setMonth(""); }, style: {width: 170}},
+        years.map(function(y){ return E("option", {key: y, value: y}, y + "年"); }),
+        E("option", {value: "all"}, "全期間（" + salesStart.substring(0,7).replace("-", "/") + "〜）")),
+      year !== "all" && E("select", {className: "inp inp-sm", value: month, onChange: function(e){ setMonth(e.target.value); }, style: {width: 90}},
+        E("option", {value: ""}, "全月"),
+        ["01","02","03","04","05","06","07","08","09","10","11","12"].map(function(m){ return E("option", {key: m, value: m}, Number(m) + "月"); })),
+      E("select", {className: "inp inp-sm", value: category, onChange: function(e){ setCategory(e.target.value); }, style: {width: 130}},
+        E("option", {value: ""}, "全区分"),
+        DRUG_CATEGORIES.map(function(c){ return E("option", {key: c, value: c}, c); })),
+      E("select", {className: "inp inp-sm", value: supplier, onChange: function(e){ setSupplier(e.target.value); }, style: {width: 130}, title: "仕入側の業者で絞り込み（販売は全件）"},
+        E("option", {value: ""}, "全業者"),
+        suppliers.map(function(s){ return E("option", {key: s, value: s}, s); })),
+      E("input", {className: "inp inp-sm", placeholder: "🔍 薬品名", value: search, onChange: function(e){ setSearch(e.target.value); }, style: {width: 150}}),
+      !take && E("label", {style: {fontSize: 12, color: "#374151", display: "flex", alignItems: "center", gap: 4}}, E("input", {type: "checkbox", checked: onlyDiff, onChange: function(){ setOnlyDiff(!onlyDiff); }}), "差のある薬だけ"),
+      E("button", {className: "btn btn-sm", style: {background: take ? "#1e40af" : "#eef2ff", color: take ? "#fff" : "#1e40af", border: "1px solid #c7d2fe"}, onClick: function(){ setTake(!take); setSelId(null); }}, take ? "← 照合に戻る" : "📋 棚卸入力"),
+      E("button", {className: "btn btn-sm btn-secondary", onClick: function(){
+        var lines = [["薬品", "区分", "単位", "在庫", "仕入本数", "販売本数", "差", "仕入額", "売上額", "販売の無い注文", "差の売値換算", "最新棚卸日", "最新棚卸数", "理論在庫", "前回棚卸からの差"]];
+        rows.forEach(function(r){ lines.push([r.d.name, r.d.category || "", r.d.unit || "", r.mode === "order" ? "持たない" : "持つ", r.pu, r.su, r.diff, r.pa, r.sa, r.badOrders != null ? r.badOrders : "", r.diffYen || "", r.st ? r.st.last.date : "", r.st ? r.st.last.n : "", r.theory != null ? r.theory : "", r.stockDiff != null ? r.stockDiff : ""]); });
+        downloadCsv("仕入と販売の照合_" + periodLabel + (category ? "_" + category : "") + ".csv", lines);
+      }}, "⬇ CSV")),
+    unlinkedInP.length > 0 && E("div", {style: {fontSize: 12, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 10}},
+      "⚠ この期間に薬品マスター未紐づけの仕入が " + unlinkedInP.length + "行（" + Object.keys(unlinkedInP.reduce(function(a,r){ a[(r.supplier||"") + "|" + (r.code || r.name)] = 1; return a; }, {})).length + "品目）あり、照合に入っていません。",
+      onGoLink && E("button", {className: "btn btn-sm", style: {marginLeft: 8}, onClick: onGoLink}, "紐づけ・原価タブへ")),
+    take ? renderTake() : null,
+    // サマリーカード
+    !take && E("div", {style: {display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap"}},
+      E("div", {style: {padding: "10px 16px", background: "#dbeafe", borderRadius: 10}}, E("div", {style: {fontSize: 11, color: "#1e40af"}}, "仕入額（着地・税抜）"), E("div", {style: {fontSize: 18, fontWeight: 700}}, "¥" + tot.pa.toLocaleString())),
+      E("div", {style: {padding: "10px 16px", background: "#d1fae5", borderRadius: 10}}, E("div", {style: {fontSize: 11, color: "#065f46"}}, "売上額（カルテ・税抜）"), E("div", {style: {fontSize: 18, fontWeight: 700}}, "¥" + tot.sa.toLocaleString())),
+      E("div", {style: {padding: "10px 16px", background: tot.diffYen ? "#fee2e2" : "#f3f4f6", borderRadius: 10}}, E("div", {style: {fontSize: 11, color: tot.diffYen ? "#991b1b" : "#6b7280"}}, "在庫なしの薬：仕入超過分の売値換算"), E("div", {style: {fontSize: 18, fontWeight: 700, color: tot.diffYen ? red : "#374151"}}, "¥" + tot.diffYen.toLocaleString())),
+      E("div", {style: {padding: "10px 16px", background: "#f3f4f6", borderRadius: 10}}, E("div", {style: {fontSize: 11, color: "#6b7280"}}, "差のある薬"), E("div", {style: {fontSize: 18, fontWeight: 700, color: rows.some(function(r){ return r.alert; }) ? red : "#059669"}}, rows.filter(function(r){ return r.alert; }).length + " / " + rows.length + "品目"))),
+    take ? null : rows.length === 0 ? E("div", {style: {textAlign: "center", padding: 30, color: "#9ca3af"}}, "この条件で仕入・販売のある紐づけ済みの薬はありません") :
+    E("div", {style: {overflowX: "auto"}}, E("table", {style: {width: "100%", fontSize: 12}},
+      E("thead", null, E("tr", {style: {background: "#f9fafb"}},
+        th("薬品"), th("区分"), th("在庫"), th("仕入本数", 1), th("販売本数", 1), th("差", 1), th("仕入額", 1), th("売上額", 1), th("照合", 0, {minWidth: 150}))),
+      E("tbody", null, rows.map(function(r){
+        var isSel = selId === r.id;
+        var diffBad = r.mode === "order" && Math.abs(r.diff) > 0.001;
+        var info;
+        if (r.mode === "order") info = r.badOrders ? E("span", {style: {color: red, fontWeight: 700}}, "販売なしの注文 " + r.badOrders + "件" + (r.diffYen ? "・約¥" + r.diffYen.toLocaleString() : "")) : (diffBad ? E("span", {style: {color: red}}, "注文と対応しない販売 " + r.freeSales + "件") : E("span", {style: {color: "#059669"}}, "✓ 一致"));
+        else if (!r.st) info = E("span", {style: {color: "#9ca3af"}}, "棚卸 未入力");
+        else info = E("span", {style: {color: r.stockDiff != null && Math.abs(r.stockDiff) > 0.001 ? red : "#374151"}}, "理論在庫 " + reconFmtStock(r.d, r.theory), E("span", {style: {color: "#9ca3af"}}, "（" + r.st.last.date.substring(5).replace("-", "/") + "棚卸から）"), r.stockDiff != null ? "／前回棚卸からの差 " + (r.stockDiff > 0 ? "+" : "") + reconFmtN(r.stockDiff) : "");
+        return E("tr", {key: r.id, onClick: function(){ setSelId(isSel ? null : r.id); }, style: {cursor: "pointer", background: isSel ? "#e0e7ff" : r.alert ? "#fef2f2" : ""}},
+          E("td", {style: {fontWeight: 600}}, r.d.name, E("span", {style: {color: "#9ca3af", fontWeight: 400, marginLeft: 4}}, "(" + r.id + ")")),
+          E("td", {style: {color: "#6b7280"}}, r.d.category || ""),
+          E("td", null, r.mode === "order" ? E("span", {className: "badge", style: {background: "#fee2e2", color: "#991b1b", fontSize: 10}}, "持たない") : E("span", {className: "badge", style: {background: "#e0e7ff", color: "#3730a3", fontSize: 10}}, "持つ")),
+          tdR(reconFmtN(r.pu) + " " + (r.d.unit || "")), tdR(reconFmtN(r.su) + " " + (r.d.unit || "")),
+          tdR((r.diff > 0 ? "+" : "") + reconFmtN(r.diff), {fontWeight: 700, color: diffBad ? red : "#6b7280"}),
+          tdR("¥" + r.pa.toLocaleString()), tdR("¥" + r.sa.toLocaleString()),
+          E("td", null, info));
+      })),
+      sameUnit != null && E("tfoot", null, E("tr", {style: {background: "#f9fafb", fontWeight: 700}},
+        E("td", {colSpan: 3}, "合計"),
+        tdR(reconFmtN(rows.reduce(function(a,r){ return a + r.pu; }, 0)) + " " + sameUnit), tdR(reconFmtN(rows.reduce(function(a,r){ return a + r.su; }, 0)) + " " + sameUnit),
+        tdR(reconFmtN(rows.reduce(function(a,r){ return a + r.diff; }, 0))), tdR("¥" + tot.pa.toLocaleString()), tdR("¥" + tot.sa.toLocaleString()), E("td", null))))),
+    take ? null : detail
+  );
+}
+
 // ═══════════════ 仕入れ管理 ═══════════════
-function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, cases, onRegisterDrug, onUpdateDrug }) {
+function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, cases, horses, farms, onRegisterDrug, onUpdateDrug }) {
   var E = React.createElement;
   var [linkEdit, setLinkEdit] = useState(null);   // 紐づけ編集中の商品キー
   var [markupSort, setMarkupSort] = useState("ratio");
@@ -9376,10 +9829,14 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
       E("button", {className:"tab-btn"+(viewTab==="summary"?" active":""),onClick:function(){setViewTab("summary");}}, "📊 商品別集計"),
       E("button", {className:"tab-btn"+(viewTab==="inventory"?" active":""),onClick:function(){setViewTab("inventory");}}, "📦 薬事台帳"),
       E("button", {className:"tab-btn"+(viewTab==="link"?" active":""),onClick:function(){setViewTab("link");}}, "🔗 紐づけ・原価"),
-      E("button", {className:"tab-btn"+(viewTab==="markup"?" active":""),onClick:function(){setViewTab("markup");}}, "💹 売値チェック")),
+      E("button", {className:"tab-btn"+(viewTab==="markup"?" active":""),onClick:function(){setViewTab("markup");}}, "💹 売値チェック"),
+      E("button", {className:"tab-btn"+(viewTab==="reconcile"?" active":""),onClick:function(){setViewTab("reconcile");}}, "⚖ 仕入と販売の照合")),
+
+    // ═══ 仕入と販売の照合タブ（独自の絞り込みを持つ）═══
+    viewTab === "reconcile" && E(PurchaseReconcileView, {purchaseHistory: purchaseHistory, drugsMaster: drugsMaster, cases: cases, horses: horses, farms: farms, onUpdateDrug: onUpdateDrug, onGoLink: function(){ setViewTab("link"); }}),
 
     // 期間切替ボタン
-    E("div", {style:{display:"flex",gap:4,marginBottom:8}},
+    viewTab !== "reconcile" && E("div", {style:{display:"flex",gap:4,marginBottom:8}},
       E("button", {className:"btn btn-sm"+(periodMode==="year"?" active":""),
         style:{background:periodMode==="year"?"#1e40af":"#e5e7eb",color:periodMode==="year"?"#fff":"#374151",border:"none",borderRadius:6,padding:"5px 14px",fontSize:12,cursor:"pointer"},
         onClick:function(){setPeriodMode("year");setFilterMonth("");setFilterDateFrom("");setFilterDateTo("");}}, "年別"),
@@ -9395,7 +9852,7 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
     ),
 
     // フィルター行
-    E("div", {style:{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}},
+    viewTab !== "reconcile" && E("div", {style:{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}},
       E("input", {className:"inp inp-sm",placeholder:"🔍 商品名・メーカー・コード",value:search,onChange:function(e){setSearch(e.target.value);},style:{width:220}}),
 
       // 年別モード
@@ -9429,7 +9886,7 @@ function PurchaseHistoryPage({ purchaseHistory, onUpdateHistory, drugsMaster, ca
     ),
 
     // 年別集計バー（年別モードかつ全年のとき）
-    periodMode === "year" && !filterYear && Object.keys(yearSummary).length > 1 && E("div", {style:{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}},
+    viewTab !== "reconcile" && periodMode === "year" && !filterYear && Object.keys(yearSummary).length > 1 && E("div", {style:{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}},
       Object.keys(yearSummary).sort().map(function(y) {
         var yd = yearSummary[y];
         return E("div", {key:y,onClick:function(){setFilterYear(y);},style:{cursor:"pointer",padding:"8px 16px",background:"#f0f9ff",borderRadius:10,border:"1px solid #bfdbfe",minWidth:130,transition:"all 0.15s"}},
@@ -12900,6 +13357,8 @@ function App() {
           onUpdateHistory: setPurchaseHistory,
           drugsMaster: drugsMaster,
           cases: cases,
+          horses: horses,
+          farms: farms,
           onRegisterDrug: function(drugData) { setDrugsMaster(function(p) { return p.concat([drugData]); }); },
           onUpdateDrug: function(id, updates) { setDrugsMaster(function(p) { return p.map(function(x){ return x.id === id ? Object.assign({}, x, updates) : x; }); }); }
         });
