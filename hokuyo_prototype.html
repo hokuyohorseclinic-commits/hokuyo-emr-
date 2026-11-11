@@ -13099,8 +13099,19 @@ function App() {
 
   const counts = {
     continu: cases.filter(c => c.type === "一般" && c.caseStatus === "継続中").length,
-    // 2026-11-09 院長指示: 過去シーズンのカルテは重複なので数えない（今シーズンの繁殖牝馬の頭数を表示）
-    breeding: cases.filter(c => c.type === "繁殖" && !c.archived && c.caseStatus === "継続中" && breedingSeasonOf(c) === Number(todayJST().slice(0, 4))).length
+    // 2026-11-11 院長指示: 単なる頭数ではなく「今みるべき頭数」を出す。今シーズンの繁殖カルテのうち
+    //   (a) ダッシュボードの繁殖スケジュールに載るもの（妊鑑待ち・予定欄や予定行で次回が決まっているもの・産後/分娩予定）
+    //   (b) 種付中のまま妊鑑の結果が入っていないもの（期限超過。(a)の表示期間を過ぎても残す＝取りこぼし防止）
+    breeding: (() => {
+      const todayS = todayJST();
+      const cs = Number(todayS.slice(0, 4));
+      return cases.filter(c => c.type === "繁殖" && !c.archived && breedingSeasonOf(c) === cs).filter(c => {
+        const ev = breedingNextEvent(c, todayS);
+        if (ev && ev.date && ev.diff <= (ev.type === "分娩予定" ? 21 : 14)) return true;
+        const e = breedingEffective(c, todayS);
+        return e.status === "種付中" && e.insDate && daysBetween(e.insDate, todayS) >= 15;
+      }).length;
+    })()
   };
   const openCase = c => {
     setEditingCase(c);
