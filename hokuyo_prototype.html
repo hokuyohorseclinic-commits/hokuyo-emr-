@@ -8990,7 +8990,7 @@ function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
     } else if (c.type === "繁殖") {
       // ★ 繁殖カルテのチェック項目は定額料金だが、ホルモン剤を実際に使う → 在庫照合では薬品消費として数える
       //   PG＝ダルマジン1mL、hCG＝ゴナトロピン3000 1A（1箱=5A→0.2箱）、gnRH＝Biorelin 1mL（1本=10mL→0.1本）
-      //   「誘発」「鎮静」は薬が特定できないためここでは数えない（要運用ルール）
+      //   誘発＝ゴナトロピン1A、鎮静＝キシラジン3mL（2026-11-12 院長確認）
       var BREED_DRUG_USE = [
         {proc: "PG",   name: "ダルマジン 10mL",          units: 1},
         {proc: "hCG",  name: "ゴナトロピン3000",         units: 0.2},
@@ -8998,7 +8998,9 @@ function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
         {proc: "Xy3",  name: "Xylazine 100 Injection 50mL", units: 3},
         {proc: "FIn5", name: "バナミン注射液 5% 50mL",   units: 5},
         {proc: "GM20", name: "Gentamax 100 Injection 100mL", units: 20},
-        {proc: "MC20", name: "マイシリンゾル　ＭＳＰＭＤＤ", units: 20}
+        {proc: "MC20", name: "マイシリンゾル　ＭＳＰＭＤＤ", units: 20},
+        {proc: "誘発", name: "ゴナトロピン3000",         units: 0.2},
+        {proc: "鎮静", name: "Xylazine 100 Injection 50mL", units: 3}
       ];
       (c.findings || []).forEach(function(f) {
         var fd = f.date || ""; if (!fd) return;
