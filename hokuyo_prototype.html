@@ -8994,7 +8994,11 @@ function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
       var BREED_DRUG_USE = [
         {proc: "PG",   name: "ダルマジン 10mL",          units: 1},
         {proc: "hCG",  name: "ゴナトロピン3000",         units: 0.2},
-        {proc: "gnRH", name: "Biorelin Injection 10mL", units: 0.1}
+        {proc: "gnRH", name: "Biorelin Injection 10mL", units: 0.1},
+        {proc: "Xy3",  name: "Xylazine 100 Injection 50mL", units: 3},
+        {proc: "FIn5", name: "バナミン注射液 5% 50mL",   units: 5},
+        {proc: "GM20", name: "Gentamax 100 Injection 100mL", units: 20},
+        {proc: "MC20", name: "マイシリンゾル　ＭＳＰＭＤＤ", units: 20}
       ];
       (c.findings || []).forEach(function(f) {
         var fd = f.date || ""; if (!fd) return;
