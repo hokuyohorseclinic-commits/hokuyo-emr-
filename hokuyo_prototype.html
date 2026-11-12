@@ -1895,6 +1895,11 @@ function calcBreedingCaseTotal(c, bm) {
 if (c.type !== "繁殖") return 0;
 return (c.findings || []).reduce(function(s, f) { return s + calcBreedingVisitTotal(f, bm); }, 0);
 }
+// 卵胞サイズは片側4つまで持てる（2026-11-13 院長指示: 複数卵胞が多い）。表示側はこの関数を通す
+function ovList(f, side){
+  var keys = side === "L" ? ["ovL","ovL2","ovL3","ovL4"] : ["ovR","ovR2","ovR3","ovR4"];
+  return keys.map(function(k){ return f && f[k]; }).filter(Boolean);
+}
 // ═══ 文字サイズ（端末ごとの設定・同期しない） 2026-11-12 院長指示（iPadで字が小さい） ═══
 function applyUiZoom(z){ try { var on = !!(z && Number(z) !== 1); document.documentElement.style.zoom = on ? String(z) : ""; document.documentElement.classList.toggle("ui-zoomed", on); } catch(e){} }
 try { var _uz = parseFloat(localStorage.getItem("hokuyo_ui_zoom") || "1"); if (_uz && _uz !== 1) applyUiZoom(_uz); } catch(e){}
@@ -5754,8 +5759,12 @@ function BreedingInputPage({
     memo: f.memo || "",
     ovL: f.ovL || f.ovaryL || "",
     ovL2: f.ovL2 || "",
+    ovL3: f.ovL3 || "",
+    ovL4: f.ovL4 || "",
     ovR: f.ovR || f.ovaryR || "",
     ovR2: f.ovR2 || "",
+    ovR3: f.ovR3 || "",
+    ovR4: f.ovR4 || "",
     ovLObs: f.ovLObs || "",
     ovRObs: f.ovRObs || "",
     estrus: f.estrus || (f.uterus && f.uterus.es) || "",
@@ -6451,7 +6460,7 @@ function BreedingInputPage({
         borderRadius: 6,
         background: "#fafafa"
       },
-      open: (f.ovL || f.ovL2 || f.ovR || f.ovR2 || f.ovLObs || f.ovRObs || f.estrus || f.fluid || f.edema || f.cyst || f.air) ? true : false
+      open: (ovList(f, "L").length || ovList(f, "R").length || f.ovLObs || f.ovRObs || f.estrus || f.fluid || f.edema || f.cyst || f.air || f.memo) ? true : false
     }, /*#__PURE__*/React.createElement("summary", {
       style: {
         fontSize: 11,
@@ -6466,8 +6475,8 @@ function BreedingInputPage({
       }
     }, "\u5375\u5DE3\u30FB\u5B50\u5BAE\u6240\u898B \u25BC", (() => {
       const parts = [];
-      const ovLParts = [f.ovL, f.ovL2].filter(Boolean);
-      const ovRParts = [f.ovR, f.ovR2].filter(Boolean);
+      const ovLParts = ovList(f, "L");
+      const ovRParts = ovList(f, "R");
       if (ovLParts.length > 0 || f.ovLObs) parts.push("\u5DE6" + (ovLParts.length > 0 ? ovLParts.join("/") : "") + (f.ovLObs ? "(" + f.ovLObs + ")" : ""));
       if (ovRParts.length > 0 || f.ovRObs) parts.push("\u53F3" + (ovRParts.length > 0 ? ovRParts.join("/") : "") + (f.ovRObs ? "(" + f.ovRObs + ")" : ""));
       const uParts = [];
@@ -6480,43 +6489,63 @@ function BreedingInputPage({
       if (parts.length === 0) return null;
       return /*#__PURE__*/React.createElement("span", {style:{fontSize:11,color:"#2563eb",fontWeight:400,marginLeft:4}}, parts.join(" \uFF5C "));
     })()),
-    // ── 卵巣（上段） ──
-    /*#__PURE__*/React.createElement("div", {style:{marginTop:8,marginBottom:10}},
-      /*#__PURE__*/React.createElement("div", {style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:6}}, "\u5375\u5DE3"),
-      (() => {
-        const OV_SIZES = ["","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6"];
-        const OV_OBS = ["","cl","排卵","黄体","出血体","出血卵胞","卵胞嚢腫","嚢腫様黄体","顆粒膜細胞腫","静止","軟化","波動","充実","退行性黄体","持続性黄体","無排卵性卵胞","二重排卵","卵巣萎縮","移行期卵胞","血腫"];
-        const renderOvSide = (label, sizeKey, size2Key, obsKey, sizeVal, size2Val, obsVal) => /*#__PURE__*/React.createElement("div", {style:{marginBottom:6,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}},
-          /*#__PURE__*/React.createElement("span", {style:{fontSize:12,color:"#374151",fontWeight:700,minWidth:20}}, label),
-          /*#__PURE__*/React.createElement("select", {className:"inp-sm",value:sizeVal.replace("cm",""),onChange:e=>{const v=e.target.value;upF(i,sizeKey,v?v+"cm":"");},style:{width:68,fontSize:12,padding:"4px 6px",minHeight:"40px"}},
-            OV_SIZES.map(s=>/*#__PURE__*/React.createElement("option",{key:s,value:s},s?s+"cm":"\u2014"))
+    // ── 卵巣（左右並び）・子宮・所見 ── 2026-11-13 院長指示: 左右を横に並べ、卵胞を4つまで、所見は自由記入
+    (() => {
+      const E = React.createElement;
+      const OV_SIZES = ["","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6"];
+      const OV_OBS = ["","cl","排卵","黄体","出血体","出血卵胞","卵胞嚢腫","嚢腫様黄体","顆粒膜細胞腫","静止","軟化","波動","充実","退行性黄体","持続性黄体","無排卵性卵胞","二重排卵","卵巣萎縮","移行期卵胞","血腫"];
+      const renderSide = (label, side, accent) => {
+        const keys = side === "L" ? ["ovL","ovL2","ovL3","ovL4"] : ["ovR","ovR2","ovR3","ovR4"];
+        const obsKey = side === "L" ? "ovLObs" : "ovRObs";
+        const obsVal = f[obsKey] || "";
+        return E("div", {style:{flex:"1 1 280px",minWidth:260,border:"1px solid #e5e7eb",borderRadius:8,padding:8,background:"#fff"}},
+          E("div", {style:{fontSize:12,fontWeight:700,color:accent,marginBottom:6}}, label + "卵巣"),
+          E("div", {style:{display:"flex",flexWrap:"wrap",gap:4,marginBottom:6}},
+            keys.map((k, n) => E("select", {
+              key: k, className: "inp-sm", value: String(f[k] || "").replace("cm",""),
+              onChange: e => { const v = e.target.value; upF(i, k, v ? v + "cm" : ""); },
+              title: "卵胞" + (n+1),
+              style: {width:74,fontSize:12,padding:"4px 6px",minHeight:"40px"}
+            }, OV_SIZES.map(sz => E("option", {key:sz, value:sz}, sz ? sz + "cm" : "卵胞" + (n+1)))))
           ),
-          /*#__PURE__*/React.createElement("select", {className:"inp-sm",value:size2Val.replace("cm",""),onChange:e=>{const v=e.target.value;upF(i,size2Key,v?v+"cm":"");},style:{width:68,fontSize:12,padding:"4px 6px",minHeight:"40px"}},
-            OV_SIZES.map(s=>/*#__PURE__*/React.createElement("option",{key:s,value:s},s?s+"cm":"\u2014"))
-          ),
-          /*#__PURE__*/React.createElement("select", {className:"inp-sm",value:OV_OBS.includes(obsVal)?obsVal:"",onChange:e=>upF(i,obsKey,e.target.value),style:{width:140,fontSize:12,padding:"4px 6px",minHeight:"40px"}},
-            OV_OBS.map(ob=>/*#__PURE__*/React.createElement("option",{key:ob,value:ob},ob||"\u6240\u898B\u2014"))
-          ),
-          /*#__PURE__*/React.createElement("input", {className:"inp-sm",value:obsVal&&!OV_OBS.includes(obsVal)?obsVal:"",onChange:e=>upF(i,obsKey,e.target.value),placeholder:"\u305D\u306E\u4ED6\u6240\u898B",style:{width:80,fontSize:11,padding:"4px 6px",minHeight:"40px"}})
-        );
-        return /*#__PURE__*/React.createElement("div", null,
-          renderOvSide("\u5DE6", "ovL", "ovL2", "ovLObs", f.ovL, f.ovL2, f.ovLObs),
-          renderOvSide("\u53F3", "ovR", "ovR2", "ovRObs", f.ovR, f.ovR2, f.ovRObs)
-        );
-      })()
-    ),
-    // ── 子宮（下段） ──
-    /*#__PURE__*/React.createElement("div", {style:{marginBottom:8}},
-      /*#__PURE__*/React.createElement("div", {style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:6}}, "\u5B50\u5BAE"),
-      /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}},
-        ["estrus", "fluid", "edema", "cyst", "air"].map(k => /*#__PURE__*/React.createElement("div", {key:k,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:2}},
-          /*#__PURE__*/React.createElement("label", {style:{fontSize:10,color:"#6b7280",fontWeight:600}}, k === "estrus" ? "ES" : k === "fluid" ? "Flu" : k === "edema" ? "Ed" : k === "cyst" ? "Cy" : "Air"),
-          /*#__PURE__*/React.createElement("select", {className:"inp-sm",value:f[k]||"",onChange:e=>upF(i,k,e.target.value),style:{width:68,fontSize:12,padding:"4px 6px",minHeight:"40px"}},
-            ["","\u2212","\u00B1","+","++","+++"].map(v=>/*#__PURE__*/React.createElement("option",{key:v,value:v},v||"\u2014"))
+          E("div", {style:{display:"flex",gap:4,flexWrap:"wrap"}},
+            E("select", {className:"inp-sm", value: OV_OBS.includes(obsVal) ? obsVal : "",
+              onChange: e => upF(i, obsKey, e.target.value),
+              style:{flex:"1 1 140px",fontSize:12,padding:"4px 6px",minHeight:"40px"}},
+              OV_OBS.map(ob => E("option", {key:ob, value:ob}, ob || "所見—"))),
+            E("input", {className:"inp-sm", value: obsVal && !OV_OBS.includes(obsVal) ? obsVal : "",
+              onChange: e => upF(i, obsKey, e.target.value), placeholder: "その他所見",
+              style:{flex:"1 1 110px",fontSize:12,padding:"4px 6px",minHeight:"40px"}})
           )
-        ))
-      )
-    ), /*#__PURE__*/React.createElement("div", {
+        );
+      };
+      return E("div", null,
+        E("div", {style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:6,marginTop:8}}, "卵巣（卵胞は4つまで）"),
+        E("div", {style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}},
+          renderSide("左 ", "L", "#1d4ed8"),
+          renderSide("右 ", "R", "#b45309")
+        ),
+        E("div", {style:{marginBottom:10}},
+          E("div", {style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:6}}, "子宮"),
+          E("div", {style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}},
+            ["estrus","fluid","edema","cyst","air"].map(k => E("div", {key:k, style:{display:"flex",flexDirection:"column",alignItems:"center",gap:2}},
+              E("label", {style:{fontSize:10,color:"#6b7280",fontWeight:600}}, k === "estrus" ? "ES" : k === "fluid" ? "Flu" : k === "edema" ? "Ed" : k === "cyst" ? "Cy" : "Air"),
+              E("select", {className:"inp-sm", value: f[k] || "", onChange: e => upF(i, k, e.target.value),
+                style:{width:68,fontSize:12,padding:"4px 6px",minHeight:"40px"}},
+                ["","−","±","+","++","+++"].map(v => E("option", {key:v, value:v}, v || "—")))
+            ))
+          )
+        ),
+        E("div", {style:{marginBottom:8}},
+          E("div", {style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:4}}, "所見・メモ（自由記入）"),
+          E("textarea", {value: f.memo || "", onChange: e => upF(i, "memo", e.target.value),
+            placeholder: "所見や状況を自由に（例: 左4cm主席卵胞、子宮内にわずかに液体貯留。明後日再検）",
+            rows: 2,
+            style:{width:"100%",boxSizing:"border-box",fontSize:13,lineHeight:1.5,padding:"6px 8px",borderRadius:6,border:"1px solid #d1d5db",resize:"vertical",minHeight:54}})
+        )
+      );
+    })()
+    , /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
         gap: 8,
@@ -6594,8 +6623,8 @@ function BreedingInputPage({
                 var procs = (f.procedures||[]).map(function(pid){var m=bm.find(function(x){return x.id===pid});return m?m.name:"";}).filter(Boolean).join(", ");
                 return React.createElement("tr", {key:fi,style:{borderTop:"1px solid #f3f4f6"}},
                   React.createElement("td", {style:{padding:"4px 8px",whiteSpace:"nowrap"}}, f.date || ""),
-                  React.createElement("td", {style:{padding:"4px 8px"}}, [f.ovL, f.ovL2].filter(Boolean).join("/"), f.ovLObs ? " "+f.ovLObs : ""),
-                  React.createElement("td", {style:{padding:"4px 8px"}}, [f.ovR, f.ovR2].filter(Boolean).join("/"), f.ovRObs ? " "+f.ovRObs : ""),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, ovList(f, "L").join("/"), f.ovLObs ? " "+f.ovLObs : ""),
+                  React.createElement("td", {style:{padding:"4px 8px"}}, ovList(f, "R").join("/"), f.ovRObs ? " "+f.ovRObs : ""),
                   React.createElement("td", {style:{padding:"4px 8px"}}, [f.edema?"浮腫"+f.edema:"", f.tone?"緊張"+f.tone:"", f.uterusObs||""].filter(Boolean).join(" ")),
                   React.createElement("td", {style:{padding:"4px 8px"}}, procs),
                   React.createElement("td", {style:{padding:"4px 8px",color:"#6b7280"}}, f.memo || "")
@@ -12206,15 +12235,15 @@ function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, 
     const _p = f.procedures || [];
     if (_p.includes("妊鑑") && !f.concep && !f.notConcep) tags.push(["⚠結果未入力", "#b45309"]);
     const _blank = !_p.length && !f.insem && !f.concep && !f.notConcep &&
-      !f.ovL && !f.ovL2 && !f.ovR && !f.ovR2 && !f.ovLObs && !f.ovRObs &&
+      !ovList(f, "L").length && !ovList(f, "R").length && !f.ovLObs && !f.ovRObs &&
       !f.estrus && !f.fluid && !f.edema && !f.cyst && !f.air &&
       !String(f.memo || "").trim() && !String(f.schedule || "").trim();
     if (_blank) tags.push(["記録なし（予定枠）", "#9ca3af"]);
     return tags;
   };
   const ovary = f => {
-    const L = [f.ovL, f.ovL2].filter(Boolean).join("/") + (f.ovLObs ? "(" + f.ovLObs + ")" : "");
-    const R = [f.ovR, f.ovR2].filter(Boolean).join("/") + (f.ovRObs ? "(" + f.ovRObs + ")" : "");
+    const L = ovList(f, "L").join("/") + (f.ovLObs ? "(" + f.ovLObs + ")" : "");
+    const R = ovList(f, "R").join("/") + (f.ovRObs ? "(" + f.ovRObs + ")" : "");
     if (!L && !R) return "";
     return "左 " + (L || "－") + "　右 " + (R || "－");
   };
