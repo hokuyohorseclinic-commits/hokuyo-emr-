@@ -66,6 +66,10 @@ select.inp{font-size:17px;min-height:44px}
 .finding-select{padding:6px 8px;font-size:14px}
 .hist-item{padding:10px 14px;font-size:14px}
 }
+/* 2026-11-12 院長指示: 文字サイズを「大／特大」にしたときだけ、表は横スクロールにして
+   馬名などが1文字ずつ折り返す（縦書きに見える）のを防ぐ。標準のときは何も変わらない */
+html.ui-zoomed table{width:auto;min-width:100%}
+html.ui-zoomed table th,html.ui-zoomed table td{white-space:nowrap}
 </style>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -1892,7 +1896,7 @@ if (c.type !== "繁殖") return 0;
 return (c.findings || []).reduce(function(s, f) { return s + calcBreedingVisitTotal(f, bm); }, 0);
 }
 // ═══ 文字サイズ（端末ごとの設定・同期しない） 2026-11-12 院長指示（iPadで字が小さい） ═══
-function applyUiZoom(z){ try { document.documentElement.style.zoom = (z && Number(z) !== 1) ? String(z) : ""; } catch(e){} }
+function applyUiZoom(z){ try { var on = !!(z && Number(z) !== 1); document.documentElement.style.zoom = on ? String(z) : ""; document.documentElement.classList.toggle("ui-zoomed", on); } catch(e){} }
 try { var _uz = parseFloat(localStorage.getItem("hokuyo_ui_zoom") || "1"); if (_uz && _uz !== 1) applyUiZoom(_uz); } catch(e){}
 function FontSizeControl(){
   var E = React.createElement;
