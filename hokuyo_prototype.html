@@ -5285,7 +5285,15 @@ function BreedingListPage({
         boxShadow: active ? "0 2px 8px rgba(0,0,0,0.1)" : "none"
       }
     }, s.icon ? s.icon+" " : "", st, " ", /*#__PURE__*/React.createElement("span", {style:{fontWeight:800,fontSize:15}}, cnt));
-  }))), count16 > 0 && !filter15Day && /*#__PURE__*/React.createElement("div", {
+  })), (() => {
+    // 2026-11-12 院長指示: 妊鑑の記録はあるのに受胎／不受胎が入っていないカルテの頭数
+    const n = breedingCases.filter(c => (c.findings || []).some(f => (f.procedures || []).includes("妊鑑") && !f.concep && !f.notConcep)).length;
+    if (!n) return null;
+    return /*#__PURE__*/React.createElement("span", {
+      title: "妊鑑の記録はあるのに受胎／不受胎が入っていないカルテ。カルテを開くと該当行に「⚠結果未入力」と出ます",
+      style: { padding: "8px 14px", borderRadius: 10, border: "2px solid #f59e0b", background: "#fffbeb", fontSize: 13, fontWeight: 700, color: "#92400e" }
+    }, "\u26A0 \u7D50\u679C\u672A\u5165\u529B ", /*#__PURE__*/React.createElement("span", { style: { fontWeight: 800, fontSize: 15 } }, n), "\u982D");
+  })()), count16 > 0 && !filter15Day && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 10,
@@ -12171,6 +12179,14 @@ function BreedingChartSummary({ findings, insDate, foalDate, bStatus, stallion, 
     else if (insDays > 0 && isAfterInsem) tags.push(["種付" + insDays + "日目", insDays >= 14 && insDays <= 18 ? "#b45309" : "#374151"]);
     if (f.concep) tags.push(["受胎＋", "#166534"]);
     if (f.notConcep) tags.push(["不受胎", "#991b1b"]);
+    // 2026-11-12 院長指示: 結果の入れ忘れ・空の予定枠が分かるように印を付ける
+    const _p = f.procedures || [];
+    if (_p.includes("妊鑑") && !f.concep && !f.notConcep) tags.push(["⚠結果未入力", "#b45309"]);
+    const _blank = !_p.length && !f.insem && !f.concep && !f.notConcep &&
+      !f.ovL && !f.ovL2 && !f.ovR && !f.ovR2 && !f.ovLObs && !f.ovRObs &&
+      !f.estrus && !f.fluid && !f.edema && !f.cyst && !f.air &&
+      !String(f.memo || "").trim() && !String(f.schedule || "").trim();
+    if (_blank) tags.push(["記録なし（予定枠）", "#9ca3af"]);
     return tags;
   };
   const ovary = f => {
