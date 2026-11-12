@@ -8995,6 +8995,18 @@ function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
           var amt = r.fee != null ? Number(r.fee) || 0 : (d ? calcDrugLine(d, r.dose, r.useRx) : 0);
           push(r.drugId, vd, r.dose, r.useRx, amt);
         });
+        // ★ 処置「マイクロチップ埋め込み」（補助金対応の定額）は薬品「マイクロチップ」を1本使う。
+        //   同じ診療に薬品側の入力もある場合（再埋め込みでチップ代だけ請求した等）は二重に数えない
+        var chipTr = (v.treatments || []).filter(function(t){ return /マイクロチップ埋/.test(t.name || ""); }).length;
+        if (chipTr > 0 && vd) {
+          var chipDrug = null;
+          for (var ci in byId) { if (byId[ci] && byId[ci].name === "マイクロチップ" && !byId[ci].archived) { chipDrug = byId[ci]; break; } }
+          var chipInDrugs = (v.drugs || []).some(function(r){ var dd = byId[reconResolveId(r.drugId, byId)]; return dd && dd.name === "マイクロチップ"; });
+          if (chipDrug && !chipInDrugs) {
+            if (!minCase || vd < minCase) minCase = vd;
+            get(chipDrug.id).sales.push(Object.assign({date: vd, units: chipTr, amount: 0, useRx: false, fromTreatment: true}, base));
+          }
+        }
       });
     }
   });
