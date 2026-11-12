@@ -8987,6 +8987,29 @@ function reconBuildEvents(purchaseHistory, drugsMaster, cases, horses, farms) {
     if (c.type === "薬事") {
       var dd = c.openDate || c.date || "";
       (c.pharmaItems || []).forEach(function(pi){ push(pi.drugId, dd, pi.dose != null ? pi.dose : pi.qty, pi.useRx, Number(pi.price) || 0); });
+    } else if (c.type === "繁殖") {
+      // ★ 繁殖カルテのチェック項目は定額料金だが、ホルモン剤を実際に使う → 在庫照合では薬品消費として数える
+      //   PG＝ダルマジン1mL、hCG＝ゴナトロピン3000 1A（1箱=5A→0.2箱）、gnRH＝Biorelin 1mL（1本=10mL→0.1本）
+      //   「誘発」「鎮静」は薬が特定できないためここでは数えない（要運用ルール）
+      var BREED_DRUG_USE = [
+        {proc: "PG",   name: "ダルマジン 10mL",          units: 1},
+        {proc: "hCG",  name: "ゴナトロピン3000",         units: 0.2},
+        {proc: "gnRH", name: "Biorelin Injection 10mL", units: 0.1}
+      ];
+      (c.findings || []).forEach(function(f) {
+        var fd = f.date || ""; if (!fd) return;
+        var procs = f.procedures || [];
+        BREED_DRUG_USE.forEach(function(m) {
+          var cnt = 0;
+          for (var pi2 = 0; pi2 < procs.length; pi2++) { if (procs[pi2] === m.proc) cnt++; }
+          if (!cnt) return;
+          var bd = null;
+          for (var bk in byId) { if (byId[bk] && byId[bk].name === m.name && !byId[bk].archived) { bd = byId[bk]; break; } }
+          if (!bd) return;
+          if (!minCase || fd < minCase) minCase = fd;
+          get(bd.id).sales.push(Object.assign({date: fd, units: cnt * m.units, amount: 0, useRx: false, fromTreatment: true}, base));
+        });
+      });
     } else {
       (c.visits || []).forEach(function(v) {
         var vd = v.date || c.openDate || "";
