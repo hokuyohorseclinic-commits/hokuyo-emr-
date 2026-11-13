@@ -374,7 +374,7 @@ var SYNC_COLLECTION = "clinicData";
 var SYNC_FIELDS = [
   "drugsMaster", "treatmentsMaster",
   "breedingTreatments", "payments", "billingActual",
-  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos"
+  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos", "todos"
 ];
 
 // ─── 従来方式の書き込み（デバウンス付き） ───
@@ -2400,6 +2400,86 @@ function DrugModal({ drug, onSave, onClose }) {
 }
 
 // ═══════════════ 診療メモ受信箱（携帯で話して保存 → Claude がカルテにする）═══════════════
+// ═══ ダッシュボード: 天気（新ひだか町）と ToDo（2026-11-13 院長指示）═══
+var WX_CODE = {0:["☀️","快晴"],1:["🌤","晴れ"],2:["⛅","晴れ時々くもり"],3:["☁️","くもり"],45:["🌫","霧"],48:["🌫","霧氷"],51:["🌦","弱い霧雨"],53:["🌦","霧雨"],55:["🌧","強い霧雨"],56:["🌧","着氷性の霧雨"],57:["🌧","着氷性の霧雨"],61:["🌧","弱い雨"],63:["🌧","雨"],65:["🌧","強い雨"],66:["🌧","着氷性の雨"],67:["🌧","着氷性の雨"],71:["🌨","弱い雪"],73:["🌨","雪"],75:["❄️","強い雪"],77:["🌨","霧雪"],80:["🌦","にわか雨"],81:["🌧","にわか雨"],82:["⛈","激しいにわか雨"],85:["🌨","にわか雪"],86:["❄️","強いにわか雪"],95:["⛈","雷雨"],96:["⛈","雷雨（ひょう）"],99:["⛈","雷雨（ひょう）"]};
+function wxOf(code) { return WX_CODE[code] || ["・", "—"]; }
+function windDirJa(deg) { if (deg == null) return ""; return ["北","北東","東","南東","南","南西","西","北西"][Math.round(deg / 45) % 8]; }
+function WeatherCard() {
+  var E = React.createElement;
+  var st = React.useState(null), wx = st[0], setWx = st[1];
+  var er = React.useState(""), err = er[0], setErr = er[1];
+  var load = function () {
+    setErr("");
+    fetch("https://api.open-meteo.com/v1/forecast?latitude=42.336&longitude=142.365&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTokyo&forecast_days=5&wind_speed_unit=ms")
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (j) { setWx(j); })
+      .catch(function () { setErr("天気を取得できませんでした"); });
+  };
+  React.useEffect(function () { load(); var t = setInterval(load, 30 * 60 * 1000); return function () { clearInterval(t); }; }, []);
+  var cur = wx && wx.current, d = wx && wx.daily;
+  var days = [];
+  if (d && d.time) for (var i = 0; i < d.time.length; i++) days.push(i);
+  var wk = ["日","月","火","水","木","金","土"];
+  return E("div", { className: "card", style: { padding: 14, flex: "1 1 300px", minWidth: 0 } },
+    E("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } },
+      E("div", { style: { fontWeight: 700, fontSize: 14, color: "#1B4F8A" } }, "🌤 新ひだか町の天気"),
+      E("button", { className: "btn btn-sm btn-secondary", onClick: load, style: { fontSize: 11 } }, "更新")),
+    err ? E("div", { style: { fontSize: 12, color: "#b45309" } }, err)
+    : !cur ? E("div", { style: { fontSize: 12, color: "#9ca3af" } }, "読み込み中…")
+    : E("div", null,
+        E("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 10 } },
+          E("div", { style: { fontSize: 38, lineHeight: 1 } }, wxOf(cur.weather_code)[0]),
+          E("div", null,
+            E("div", { style: { fontSize: 24, fontWeight: 800, lineHeight: 1.1 } }, Math.round(cur.temperature_2m) + "℃"),
+            E("div", { style: { fontSize: 12, color: "#6b7280" } }, wxOf(cur.weather_code)[1] + "　" + windDirJa(cur.wind_direction_10m) + "の風 " + Math.round(cur.wind_speed_10m) + "m/s"))),
+        E("div", { style: { display: "flex", gap: 4 } }, days.map(function (i) {
+          var dt = new Date(d.time[i] + "T00:00:00+09:00");
+          var p = d.precipitation_probability_max ? d.precipitation_probability_max[i] : null;
+          return E("div", { key: i, style: { flex: 1, textAlign: "center", background: i === 0 ? "#eef6f6" : "#f9fafb", borderRadius: 8, padding: "6px 2px", minWidth: 0 } },
+            E("div", { style: { fontSize: 11, fontWeight: 700, color: "#6b7280" } }, i === 0 ? "今日" : (dt.getMonth() + 1) + "/" + dt.getDate() + "(" + wk[dt.getDay()] + ")"),
+            E("div", { style: { fontSize: 20, lineHeight: 1.3 } }, wxOf(d.weather_code[i])[0]),
+            E("div", { style: { fontSize: 12, fontWeight: 700 } }, E("span", { style: { color: "#dc2626" } }, Math.round(d.temperature_2m_max[i])), " / ", E("span", { style: { color: "#2563eb" } }, Math.round(d.temperature_2m_min[i]))),
+            E("div", { style: { fontSize: 10, color: "#6b7280" } }, p == null ? "" : "降水 " + p + "%"));
+        }))));
+}
+function TodoCard(props) {
+  var E = React.createElement;
+  var todos = Array.isArray(props.todos) ? props.todos : [];
+  var upd = props.onUpdate || function () {};
+  var tx = React.useState(""), text = tx[0], setText = tx[1];
+  var sd = React.useState(false), showDone = sd[0], setShowDone = sd[1];
+  var add = function () {
+    var v = text.trim(); if (!v) return;
+    upd(todos.concat([{ id: Date.now() + "-" + Math.floor(Math.random() * 1000), text: v, done: false, createdAt: new Date().toISOString() }]));
+    setText("");
+  };
+  var toggle = function (id) { upd(todos.map(function (t) { return t.id === id ? Object.assign({}, t, { done: !t.done, doneAt: !t.done ? new Date().toISOString() : "" }) : t; })); };
+  var del = function (id) { upd(todos.filter(function (t) { return t.id !== id; })); };
+  var open = todos.filter(function (t) { return !t.done; });
+  var done = todos.filter(function (t) { return t.done; }).sort(function (a, b) { return (b.doneAt || "").localeCompare(a.doneAt || ""); });
+  var row = function (t) {
+    return E("div", { key: t.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f3f4f6" } },
+      E("input", { type: "checkbox", checked: !!t.done, onChange: function () { toggle(t.id); }, style: { width: 18, height: 18, flexShrink: 0, cursor: "pointer" } }),
+      E("div", { style: { flex: 1, fontSize: 13, minWidth: 0, wordBreak: "break-word", color: t.done ? "#9ca3af" : "#111827", textDecoration: t.done ? "line-through" : "none" } }, t.text),
+      E("button", { onClick: function () { del(t.id); }, title: "削除", style: { border: "none", background: "none", color: "#9ca3af", fontSize: 16, cursor: "pointer", padding: "0 4px", flexShrink: 0 } }, "×"));
+  };
+  return E("div", { className: "card", style: { padding: 14, flex: "1 1 300px", minWidth: 0 } },
+    E("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } },
+      E("div", { style: { fontWeight: 700, fontSize: 14, color: "#1B4F8A" } }, "✅ ToDo", open.length ? E("span", { style: { marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fef3c7", borderRadius: 10, padding: "2px 8px" } }, "残り " + open.length) : null),
+      done.length ? E("button", { className: "btn btn-sm btn-secondary", onClick: function () { setShowDone(!showDone); }, style: { fontSize: 11 } }, showDone ? "完了を隠す" : "完了 " + done.length + "件を表示") : null),
+    E("div", { style: { display: "flex", gap: 6, marginBottom: 6 } },
+      E("input", { className: "inp-sm", value: text, placeholder: "やることを入力してEnter", onChange: function (e) { setText(e.target.value); },
+        onKeyDown: function (e) { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); add(); } }, style: { flex: 1, fontSize: 13, padding: "6px 8px", minHeight: 36, minWidth: 0 } }),
+      E("button", { className: "btn btn-sm btn-primary", onClick: add }, "追加")),
+    open.length === 0 && !showDone ? E("div", { style: { fontSize: 12, color: "#9ca3af", padding: "6px 2px" } }, "やることはありません") : null,
+    E("div", { style: { maxHeight: 220, overflowY: "auto" } }, open.map(row), showDone ? done.map(row) : null),
+    showDone && done.length ? E("div", { style: { textAlign: "right", marginTop: 6 } }, E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { upd(open); setShowDone(false); } }, "完了したものを消す")) : null);
+}
+function DashExtras(props) {
+  return React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-start" } },
+    React.createElement(WeatherCard, null),
+    React.createElement(TodoCard, { todos: props.todos, onUpdate: props.onUpdateTodos }));
+}
 function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone }) {
   const E = React.createElement;
   const [text, setText] = useState("");
@@ -10280,7 +10360,9 @@ function DashboardPage({
   onCloseCase,
   memos,
   onUpdateMemos,
-  onConfirmDraft
+  onConfirmDraft,
+  todos,
+  onUpdateTodos
 }) {
   const contCasesAll = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D" && !c.archived);
   const todayStr = todayJST();
@@ -10446,7 +10528,7 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
+  }, s.sub)))))), /*#__PURE__*/React.createElement(DashExtras, {todos: todos, onUpdateTodos: onUpdateTodos}), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
     /*#__PURE__*/React.createElement("div", {style: {padding: "10px 14px", background: "#fffbeb", color: "#92400e", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer"}, onClick: () => setShowCheck(!showCheck)},
       /*#__PURE__*/React.createElement("span", null, (showCheck ? "▾" : "▸") + " ⚠ 確認が必要なカルテ"),
       /*#__PURE__*/React.createElement("span", {className: "badge badge-orange"}, checkItems.length + "件"),
@@ -12628,6 +12710,7 @@ function App() {
   });
   const [insuranceList, setInsuranceList] = useState(() => effectiveData?.insuranceList || []);
   const [memos, setMemos] = useState(() => effectiveData?.memos || []);   // 診療メモ受信箱（携帯から話して保存 → Claudeがカルテ化）
+  const [todos, setTodos] = useState(() => effectiveData?.todos || []);   // ダッシュボードのToDo（全端末で共有）
   const [memoMode, setMemoMode] = useState(() => (location.hash || "").indexOf("memo") >= 0);
   React.useEffect(() => { const h = () => setMemoMode((location.hash || "").indexOf("memo") >= 0); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
   const [editingCase, setEditingCase] = useState(null);
@@ -12699,6 +12782,7 @@ function App() {
     registerRemoteUpdateCallback("closedMonths", function(d) { setClosedMonths(d); });
     registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
     registerRemoteUpdateCallback("memos", function(d) { setMemos(Array.isArray(d) ? d : []); });
+    registerRemoteUpdateCallback("todos", function(d) { setTodos(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
     // v2: カルテ・馬は1件ずつ受信して state に差し込む（配列まるごとの置き換えはしない）
     const mergeItems = (setter) => (upserts, deletedIds) => setter(prev => {
@@ -12763,6 +12847,7 @@ function App() {
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("closedMonths", closedMonths); }, [closedMonths]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("memos", memos); }, [memos]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("todos", todos); }, [todos]);
   // Claude（Cowork）がメモをカルテ化するための入口（ログイン済みの本番画面でのみ使う）
   React.useEffect(() => { window.__emr = { saveCase, setCases, setHorses, setFarms, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos, vets, currentVet}), newRecordId, newRowId, getSyncReport }; });
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
@@ -13335,6 +13420,8 @@ function App() {
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
           onUpdateMemos: setMemos,
+          todos: todos,
+          onUpdateTodos: setTodos,
           onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
       case "general_batch":
@@ -13683,6 +13770,8 @@ function App() {
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
           memos: memos,
           onUpdateMemos: setMemos,
+          todos: todos,
+          onUpdateTodos: setTodos,
           onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
     }
