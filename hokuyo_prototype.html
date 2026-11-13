@@ -1926,7 +1926,7 @@ function SymptomPicker(props) {
             return E("button", { key: s, onClick: function () { on(s); }, className: "symptom-btn active", style: { fontSize: 13 } }, s + " ×");
           })),
     // 2026-11-13 院長指示: 馬の絵（シェーマ）はやめてプルダウンだけにする
-    E("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "8px 10px" } },
+    E("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px 10px" } },
       drop("部位", PART_BODY),
       drop("肢・関節", PART_LIMB),
       drop("傷の種類", WOUND_KINDS),
