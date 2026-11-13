@@ -1895,6 +1895,77 @@ function calcBreedingCaseTotal(c, bm) {
 if (c.type !== "繁殖") return 0;
 return (c.findings || []).reduce(function(s, f) { return s + calcBreedingVisitTotal(f, bm); }, 0);
 }
+// ═══ 症状ピッカー（馬のシェーマ＋プルダウン） 2026-11-13 院長指示 ═══
+var BODY_ZONES = [
+  { k: "頭部", d: "M12,54 L40,44 L54,54 L52,70 L26,76 L10,66 Z" },
+  { k: "頸部", d: "M52,58 L100,74 L104,108 L66,100 L48,72 Z" },
+  { k: "胸部", d: "M100,74 L124,70 L126,106 L104,110 Z" },
+  { k: "背腰", d: "M124,70 L232,66 L236,106 L126,106 Z" },
+  { k: "腹部", d: "M126,106 L236,106 L232,144 L130,144 Z" },
+  { k: "臀部", d: "M232,66 L272,76 L274,118 L236,118 Z" },
+  { k: "尾", d: "M272,76 L296,68 L300,92 L276,100 Z" },
+  { k: "陰部", d: "M240,118 L268,118 L268,136 L240,136 Z" },
+  { k: "乳房", d: "M200,144 L228,144 L228,160 L200,160 Z" }
+];
+var LEG_ZONES = [
+  { k: "左前肢", x: 104, label: "左前" },
+  { k: "右前肢", x: 124, label: "右前" },
+  { k: "左後肢", x: 222, label: "左後" },
+  { k: "右後肢", x: 242, label: "右後" }
+];
+var PART_DETAIL = ["蹄", "繋", "球節", "管部", "腕節", "飛節", "膝", "肘", "肩", "上腕", "大腿", "眼", "口腔", "全身"];
+var WOUND_KINDS = ["切創", "刺創", "裂創", "擦過創", "挫創", "咬傷", "打撲", "膿瘍", "化膿", "蜂窩織炎", "皮膚炎", "裂蹄", "蹄膿瘍", "蹄叉腐爛", "腱炎", "関節炎", "骨折"];
+var SIGNS = ["跛行", "疼痛", "腫脹", "熱感", "浮腫", "出血", "発熱", "咳", "鼻汁", "呼吸促拍", "呼吸音異常", "流涙", "眼脂", "眼瞼腫脹", "食欲不振", "元気消失", "疝痛", "下痢", "軟便", "便秘", "発汗", "脱水", "削痩", "起立不能", "神経症状", "腫瘍", "排尿異常", "外陰部排出物"];
+function SymptomPicker(props) {
+  var E = React.createElement;
+  var sel = props.symptoms || [];
+  var on = props.onToggle;
+  var has = function (k) { return sel.indexOf(k) >= 0; };
+  var fill = function (k) { return has(k) ? "#2563eb" : "#e5e7eb"; };
+  var drop = function (label, items) {
+    return E("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 6 } },
+      E("span", { style: { fontSize: 11, fontWeight: 700, color: "#6b7280", width: 78, flexShrink: 0 } }, label),
+      E("select", {
+        className: "inp-sm", value: "",
+        onChange: function (e) { if (e.target.value) on(e.target.value); },
+        style: { flex: "1 1 160px", maxWidth: 260, fontSize: 13, padding: "6px 8px", minHeight: "40px" }
+      }, [E("option", { key: "", value: "" }, "選んで追加…")].concat(items.map(function (x) {
+        return E("option", { key: x, value: x }, (has(x) ? "✓ " : "") + x);
+      }))));
+  };
+  return E("div", null,
+    // 選択済みチップ
+    E("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, minHeight: 30, marginBottom: 8 } },
+      sel.length === 0
+        ? E("span", { style: { fontSize: 12, color: "#9ca3af" } }, "下の図やプルダウンから選ぶとここに出ます")
+        : sel.map(function (s) {
+            return E("button", { key: s, onClick: function () { on(s); }, className: "symptom-btn active", style: { fontSize: 13 } }, s + " ×");
+          })),
+    E("div", { style: { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" } },
+      // 馬のシェーマ
+      E("div", { style: { flex: "0 0 auto" } },
+        E("div", { style: { fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 } }, "部位（図をタップ）"),
+        E("svg", { viewBox: "0 0 310 200", style: { width: 310, maxWidth: "100%", height: "auto", background: "#fafafa", borderRadius: 8, border: "1px solid #e5e7eb", touchAction: "manipulation" } },
+          BODY_ZONES.map(function (z) {
+            return E("path", { key: z.k, d: z.d, onClick: function () { on(z.k); },
+              style: { cursor: "pointer", fill: fill(z.k), stroke: "#9ca3af", strokeWidth: 1 } }, E("title", null, z.k));
+          }),
+          LEG_ZONES.map(function (l) {
+            return E("g", { key: l.k, onClick: function () { on(l.k); }, style: { cursor: "pointer" } },
+              E("rect", { x: l.x, y: 144, width: 16, height: 38, rx: 4, style: { fill: fill(l.k), stroke: "#9ca3af", strokeWidth: 1 } }, E("title", null, l.k)),
+              E("text", { x: l.x + 8, y: 194, textAnchor: "middle", style: { fontSize: 11, fill: has(l.k) ? "#1d4ed8" : "#6b7280", fontWeight: 700 } }, l.label));
+          }))),
+      // プルダウン
+      E("div", { style: { flex: "1 1 280px", minWidth: 250 } },
+        drop("部位（細かい）", PART_DETAIL),
+        drop("傷の種類", WOUND_KINDS),
+        drop("症状", SIGNS),
+        E("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          E("span", { style: { fontSize: 11, fontWeight: 700, color: "#6b7280", width: 78, flexShrink: 0 } }, "その他"),
+          E("input", { className: "inp-sm", placeholder: "自由に入力してEnter", style: { flex: "1 1 160px", maxWidth: 260, fontSize: 13, padding: "6px 8px", minHeight: "40px" },
+            onKeyDown: function (e) { if (e.key === "Enter") { e.preventDefault(); var v = e.target.value.trim(); if (v) { on(v); e.target.value = ""; } } } }))))
+  );
+}
 // 卵胞サイズは片側4つまで持てる（2026-11-13 院長指示: 複数卵胞が多い）。表示側はこの関数を通す
 function ovList(f, side){
   var keys = side === "L" ? ["ovL","ovL2","ovL3","ovL4"] : ["ovR","ovR2","ovR3","ovR4"];
@@ -3877,7 +3948,7 @@ function GeneralKartePage({
     style: {marginBottom: 16}
   }, /*#__PURE__*/React.createElement("h3", {
     style: {fontSize: 13, fontWeight: 700, marginBottom: 8, color: "#1e40af"}
-  }, "\u8A3A\u7642\u5C65\u6B74 (", pastVisits.length, "\u56DE)"), pastVisits.map((v, i) => {
+  }, "\u8A3A\u7642\u5C65\u6B74 (", pastVisits.length, "\u56DE)"), pastVisits.map((v, i) => ({ v, i })).sort((a, b) => (a.v.date || "").localeCompare(b.v.date || "") || a.i - b.i).map(({ v, i }) => {   // 2026-11-13 院長指示: 入力順ではなく日付順（古い順）に
     const vt = calcVisitTotal(v, drugsMaster);
     const isEditing = editVisitIdx === i;
     return /*#__PURE__*/React.createElement("div", {
@@ -4264,28 +4335,7 @@ function GeneralKartePage({
       fontWeight: 700,
       marginBottom: 12
     }
-  }, "\u2461 \u75C7\u72B6"), SYMPTOM_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
-    key: g.label,
-    style: { display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: { width: 64, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", paddingTop: 6 }
-  }, g.label), /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", flexWrap: "wrap", gap: 6 }
-  }, g.items.map(s => /*#__PURE__*/React.createElement("button", {
-    key: s,
-    onClick: () => toggleSymptom(s),
-    className: `symptom-btn ${symptoms.includes(s) ? "active" : ""}`
-  }, s))))), symptoms.filter(s => !SYMPTOM_GROUPS.some(g => g.items.includes(s))).length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: { width: 64, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", paddingTop: 6 }
-  }, "その他"), /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", flexWrap: "wrap", gap: 6 }
-  }, symptoms.filter(s => !SYMPTOM_GROUPS.some(g => g.items.includes(s))).map(s => /*#__PURE__*/React.createElement("button", {
-    key: s,
-    onClick: () => toggleSymptom(s),
-    className: "symptom-btn active"
-  }, s))))), /*#__PURE__*/React.createElement("div", {
+  }, "\u2461 \u75C7\u72B6"), /*#__PURE__*/React.createElement(SymptomPicker, { symptoms: symptoms, onToggle: toggleSymptom })), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 20,
