@@ -374,7 +374,7 @@ var SYNC_COLLECTION = "clinicData";
 var SYNC_FIELDS = [
   "drugsMaster", "treatmentsMaster",
   "breedingTreatments", "payments", "billingActual",
-  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos", "todos", "calCfg"
+  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos", "todos", "calCfg", "otherDocs"
 ];
 
 // ─── 従来方式の書き込み（デバウンス付き） ───
@@ -12053,7 +12053,162 @@ function InsuranceLedger() {
           ["診断日", "保険", "馬名", "性・年齢", "牧場（管理者）", "代理店", "診断医", "結果", "請求額"].map(function (t, i) { return E("th", { key: i, style: i === 8 ? { textAlign: "right" } : null }, t); }))),
         E("tbody", null, rows.length ? body : E("tr", null, E("td", { colSpan: 9, style: { textAlign: "center", color: "#9ca3af", padding: 20 } }, recs ? "該当する診断書はありません" : "読み込み中…"))))));
 }
-function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, currentVet, onToggleReportDone, onToggleCertDone, insuranceList, onUpdateInsuranceList }) {
+// ═══ 2026-11-14 院長指示: 「その他」で受胎証明書・生殖器検査実施報告書・欠場診断書（HBA／セレクト）を作成・印刷。発行履歴は全端末で共有 ═══
+var OD_CLINIC = { name: "北洋ホースクリニック", addr: "〒056-0144 北海道日高郡新ひだか町静内田原569", tel: "TEL 0146-46-2356　FAX 0146-46-2357" };
+var OD_KINDS = [
+  { k: "preg", icon: "🤰", t: "受胎証明書", d: "保険（三井住友・損保ジャパン）・JSセール用" },
+  { k: "genital", icon: "🩺", t: "生殖器検査実施報告書", d: "ジェイエス繁殖馬セール（左右卵巣エコー付き）" },
+  { k: "hba", icon: "📄", t: "欠場診断書（HBA市場）", d: "北海道市場（トレーニング・セレクション・サマー・オータム等）" },
+  { k: "select", icon: "📄", t: "欠場診断書（セレクトセール）", d: "日本競走馬協会 セレクトセール" }
+];
+var OD_LABEL = {}; OD_KINDS.forEach(function (x) { OD_LABEL[x.k] = x.t; });
+function odAddDays(s, n) { if (!s) return ""; var d = new Date(s + "T00:00:00"); d.setDate(d.getDate() + n); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function odDays(a, b) { if (!a || !b) return ""; return Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000); }
+function odJp(s) { if (!s) return "　　年　　月　　日"; var p = s.split("-"); return Number(p[0]) + "年" + Number(p[1]) + "月" + Number(p[2]) + "日"; }
+function odEsc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+function odDefaults(kind, vet) {
+  var y = todayJST().slice(0, 4);
+  var base = { date: todayJST(), horse: "", sex: "", age: "", color: "", sire: "", dam: "", chip: "", owner: "", vet: vet || "", vetNo: (vet || "").indexOf("佐藤") >= 0 ? "第31717号" : "" };
+  if (kind === "preg") return Object.assign(base, { to: "保険（三井住友海上）", stallion: "", insDate: "", examDate: todayJST(), method: "直腸検査および超音波画像診断", result: "受胎（妊娠）を確認した", note: "" });
+  if (kind === "genital") return Object.assign(base, { sale: "ジェイエス繁殖馬セール" + y, lot: "", examDate: todayJST(), vulva: "異常なし", vagina: "異常なし", cervix: "異常なし", uterus: "異常なし", ovL: "", ovR: "", summary: "生殖器に異常を認めない", imgL: "", imgR: "" });
+  if (kind === "hba") return Object.assign(base, { to: "日高軽種馬農業協同組合　組合長 殿", sale: "北海道サマーセール" + y, lot: "", disease: "", finding: "", period: "", examDate: todayJST() });
+  return Object.assign(base, { to: "一般社団法人 日本競走馬協会　会長 殿", sale: "セレクトセール" + y + "（1歳）", lot: "", disease: "", finding: "", period: "", examDate: todayJST() });
+}
+function odHtml(kind, f) {
+  var row = function (a, b) { return "<tr><th>" + a + "</th><td>" + odEsc(b) + "</td></tr>"; };
+  var horseRows = row("馬名", f.horse) + row("性・年齢", [f.sex, f.age].filter(Boolean).join("　")) + (f.color ? row("毛色", f.color) : "") + ((f.sire || f.dam) ? row("父／母", (f.sire || "") + "　／　" + (f.dam || "")) : "") + (f.chip ? row("マイクロチップ", f.chip) : "") + row(kind === "hba" || kind === "select" ? "申込者（生産・所有者）" : "所有者・管理者", f.owner);
+  var title = "", toLine = "", body = "", extra = "";
+  if (kind === "preg") {
+    title = "受 胎 証 明 書";
+    toLine = f.to ? odEsc(f.to) + "　御中" : "";
+    var age = odDays(f.insDate, f.examDate);
+    body = "<table>" + horseRows + row("交配種牡馬", f.stallion) + row("最終交配日", f.insDate ? odJp(f.insDate) : "") + row("検査日", odJp(f.examDate)) + row("検査方法", f.method) + row("胎齢", age !== "" ? age + "日" : "") + row("分娩予定日（目安）", f.insDate ? odJp(odAddDays(f.insDate, 340)) : "") + row("備考", f.note) + "</table>" +
+      "<p class='decl'>上記の馬について検査した結果、" + odEsc(f.result) + "ことを証明します。</p>";
+  } else if (kind === "genital") {
+    title = "生殖器検査実施報告書";
+    toLine = "株式会社ジェイエス　御中";
+    body = "<table>" + row("セール名", f.sale) + row("上場番号", f.lot) + horseRows + row("検査日", odJp(f.examDate)) + row("外陰部", f.vulva) + row("腟", f.vagina) + row("子宮頸管", f.cervix) + row("子宮", f.uterus) + row("左卵巣", f.ovL) + row("右卵巣", f.ovR) + row("総合所見", f.summary) + "</table>" +
+      "<p class='decl'>上記の馬について生殖器検査を実施したので報告します。</p>";
+    if (f.imgL || f.imgR) extra = "<div class='pb'></div><div class='us'><div class='usname'>" + odEsc(f.horse) + "</div><div class='usrow'>" +
+      [["L", f.imgL], ["R", f.imgR]].map(function (p) { return "<div class='usbox'>" + (p[1] ? "<img src='" + p[1] + "'>" : "") + "<div class='uslr'>" + p[0] + "</div></div>"; }).join("") + "</div></div>";
+  } else {
+    title = "欠 場 診 断 書";
+    toLine = odEsc(f.to);
+    body = "<table>" + row("市場名", f.sale) + row("上場番号", f.lot) + horseRows + row("診断日", odJp(f.examDate)) + row("診断名", f.disease) + row("症状・所見", f.finding) + row("治療・休養見込み", f.period) + "</table>" +
+      "<p class='decl'>上記の理由により、" + odEsc(f.sale) + "への上場は困難であると診断します。</p>";
+  }
+  var css = "@page{size:A4;margin:18mm 18mm}body{font-family:'Hiragino Mincho ProN','Yu Mincho',serif;color:#111;font-size:12pt}h1{text-align:center;font-size:20pt;letter-spacing:.3em;margin:6mm 0 8mm}.to{font-size:13pt;margin-bottom:6mm}.date{text-align:right;margin-bottom:4mm}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:7px 10px;vertical-align:top}th{width:32%;background:#f3f4f6;font-weight:600;text-align:left}td{white-space:pre-wrap}.decl{margin:8mm 0}.sign{margin-top:10mm;margin-left:45%;line-height:1.9}.sign .v{font-size:13pt}.pb{page-break-before:always}.us{text-align:center}.usname{font-size:16pt;font-weight:700;margin:4mm 0 6mm}.usrow{display:flex;flex-direction:column;gap:8mm;align-items:center}.usbox img{max-width:150mm;max-height:105mm;display:block;margin:0 auto}.uslr{font-size:18pt;font-weight:700;margin-top:2mm}";
+  return "<!DOCTYPE html><html lang='ja'><head><meta charset='utf-8'><title>" + odEsc(title.replace(/ /g, "") + "_" + (f.horse || "")) + "</title><style>" + css + "</style></head><body>" +
+    "<div class='date'>" + odJp(f.date) + "</div>" + (toLine ? "<div class='to'>" + toLine + "</div>" : "") + "<h1>" + title + "</h1>" + body +
+    "<div class='sign'>" + OD_CLINIC.addr + "<br>" + OD_CLINIC.name + "<br>" + OD_CLINIC.tel + "<br><span class='v'>獣医師　" + odEsc(f.vet) + "　　印</span>" + (f.vetNo ? "<br>獣医師免許番号　" + odEsc(f.vetNo) : "") + "</div>" + extra +
+    "<script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>";
+}
+function odPrint(kind, f) { var w = window.open("", "_blank"); if (!w) { alert("ポップアップが止められました。ブラウザでこのサイトのポップアップを許可してください。"); return; } w.document.open(); w.document.write(odHtml(kind, f)); w.document.close(); }
+function OtherDocsPanel(props) {
+  var E = React.createElement;
+  var horses = props.horses || [], farms = props.farms || [], cases = props.cases || [];
+  var docs = Array.isArray(props.otherDocs) ? props.otherDocs : [];
+  var S1 = React.useState(""), kind = S1[0], setKind = S1[1];
+  var S2 = React.useState({}), f = S2[0], setF = S2[1];
+  var S3 = React.useState(null), editId = S3[0], setEditId = S3[1];
+  var S4 = React.useState(""), hq = S4[0], setHq = S4[1];
+  var farmName = function (id) { var x = farms.find(function (z) { return String(z.id) === String(id); }); return x ? x.name : ""; };
+  var set = function (k, v) { setF(function (p) { var o = Object.assign({}, p); o[k] = v; return o; }); };
+  var start = function (k) { setKind(k); setEditId(null); setF(odDefaults(k, props.currentVet)); setHq(""); };
+  var pickHorse = function (txt) {
+    setHq(txt);
+    var nm = txt.split("（")[0].trim(); var h = horses.find(function (x) { return x.name === nm; });
+    if (!h) { set("horse", txt); return; }
+    var bc = cases.filter(function (c) { return c.type === "繁殖" && String(c.horseId) === String(h.id); }).sort(function (a, b) { return (b.inseminationDate || b.openDate || "").localeCompare(a.inseminationDate || a.openDate || ""); })[0];
+    setF(function (p) {
+      var o = Object.assign({}, p, { horse: h.name, sex: h.sex || p.sex, age: h.age ? (String(h.age).match(/歳|才/) ? h.age : h.age + "歳") : p.age, color: h.color || p.color, sire: h.sire || p.sire, dam: h.dam || p.dam, chip: h.microchip || h.chip || p.chip, owner: farmName(h.farmId) || p.owner });
+      if (bc && "stallion" in p) { o.stallion = bc.stallion || p.stallion; o.insDate = bc.inseminationDate || p.insDate; }
+      return o;
+    });
+  };
+  var onImg = function (k, file) {
+    if (!file) return; var rd = new FileReader();
+    rd.onload = function () { var img = new Image(); img.onload = function () { var sc = Math.min(1, 1400 / img.width); var cv = document.createElement("canvas"); cv.width = img.width * sc; cv.height = img.height * sc; cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height); set(k, cv.toDataURL("image/jpeg", 0.85)); }; img.src = rd.result; };
+    rd.readAsDataURL(file);
+  };
+  var save = function (andPrint) {
+    if (!f.horse) { alert("馬名を入れてください"); return; }
+    var data = Object.assign({}, f); delete data.imgL; delete data.imgR;   // 画像は容量が大きいので履歴には残さない（印刷時のみ）
+    var rec = { id: editId || (Date.now() + "-" + Math.floor(Math.random() * 1000)), kind: kind, horse: f.horse, date: f.date, vet: f.vet, data: data, savedAt: new Date().toISOString() };
+    props.onUpdateOtherDocs(editId ? docs.map(function (d) { return d.id === editId ? rec : d; }) : [rec].concat(docs));
+    setEditId(rec.id);
+    if (andPrint) odPrint(kind, f);
+  };
+  var fld = function (label, k, opt) {
+    opt = opt || {};
+    var inp = opt.area ? E("textarea", { className: "inp-sm", rows: opt.rows || 2, value: f[k] || "", onChange: function (e) { set(k, e.target.value); }, style: { width: "100%" } })
+      : E("input", { className: "inp-sm", type: opt.type || "text", list: opt.list, value: f[k] || "", placeholder: opt.ph || "", onChange: function (e) { set(k, e.target.value); }, style: { width: "100%" } });
+    return E("div", { key: k, style: { gridColumn: opt.wide ? "1 / -1" : "auto" } }, E("label", { className: "lbl" }, label), inp);
+  };
+  var grid = function (kids) { return E("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 10 } }, kids); };
+  var horseList = React.useMemo(function () { return horses.slice(0, 3000).map(function (h) { return h.name + (h.farmId ? "（" + farmName(h.farmId) + "）" : ""); }); }, [horses, farms]);
+  var form = null;
+  if (kind) {
+    var common = [
+      E("div", { key: "hq", style: { gridColumn: "1 / -1" } }, E("label", { className: "lbl" }, "馬を選ぶ（登録馬なら性・年齢・牧場・種付情報を自動入力）"),
+        E("input", { className: "inp-sm", list: "odHorses", value: hq, placeholder: "馬名を入力して候補から選択", onChange: function (e) { pickHorse(e.target.value); }, style: { width: "100%" } }),
+        E("datalist", { id: "odHorses" }, horseList.map(function (n, i) { return E("option", { key: i, value: n }); }))),
+      fld("馬名", "horse"), fld("性", "sex", { list: "odSex" }), fld("年齢", "age", { ph: "例: 8歳" }),
+      fld("毛色", "color"), fld("父", "sire"), fld("母", "dam"),
+      fld("マイクロチップ", "chip"), fld(kind === "hba" || kind === "select" ? "申込者（生産・所有者）" : "所有者・管理者", "owner"), fld("発行日", "date", { type: "date" })
+    ];
+    var spec = [];
+    if (kind === "preg") spec = [fld("提出先", "to", { list: "odTo" }), fld("交配種牡馬", "stallion"), fld("最終交配日", "insDate", { type: "date" }), fld("検査日", "examDate", { type: "date" }), fld("検査方法", "method"), fld("結果", "result", { list: "odRes" }),
+      E("div", { key: "calc", style: { fontSize: 12, color: "#5b21b6", alignSelf: "end", paddingBottom: 6 } }, f.insDate ? ("胎齢 " + odDays(f.insDate, f.examDate) + "日　分娩予定 " + odAddDays(f.insDate, 340).replace(/-/g, "/")) : ""),
+      fld("備考", "note", { wide: true, area: true })];
+    else if (kind === "genital") spec = [fld("セール名", "sale"), fld("上場番号", "lot"), fld("検査日", "examDate", { type: "date" }), fld("外陰部", "vulva"), fld("腟", "vagina"), fld("子宮頸管", "cervix"), fld("子宮", "uterus", { wide: true }), fld("左卵巣", "ovL", { ph: "例: 25mm卵胞" }), fld("右卵巣", "ovR"), fld("総合所見", "summary"),
+      E("div", { key: "imgs", style: { gridColumn: "1 / -1", display: "flex", gap: 16, flexWrap: "wrap" } }, ["imgL", "imgR"].map(function (k) {
+        return E("div", { key: k }, E("label", { className: "lbl" }, (k === "imgL" ? "左卵巣（L）" : "右卵巣（R）") + "エコー画像"), E("input", { type: "file", accept: "image/*", onChange: function (e) { onImg(k, e.target.files[0]); } }), f[k] ? E("img", { src: f[k], style: { display: "block", maxHeight: 90, marginTop: 4, border: "1px solid #e5e7eb" } }) : null);
+      }), E("div", { style: { fontSize: 11, color: "#6b7280", alignSelf: "end" } }, "画像は印刷時の2枚目（上に馬名・下にL／R）に入ります。履歴には残りません。"))];
+    else spec = [fld("宛先", "to", { wide: true }), fld("市場名", "sale", { list: kind === "hba" ? "odHba" : "odSel" }), fld("上場番号", "lot"), fld("診断日", "examDate", { type: "date" }), fld("診断名", "disease", { wide: true }), fld("症状・所見", "finding", { wide: true, area: true, rows: 3 }), fld("治療・休養見込み", "period", { wide: true, ph: "例: 約4週間の舎飼い・治療を要する" })];
+    var vetRow = [fld("診断獣医師", "vet"), fld("獣医師免許番号", "vetNo", { ph: "例: 第31717号" })];
+    form = E("div", { className: "card", style: { padding: 16, marginBottom: 16, border: "2px solid #1B4F8A" } },
+      E("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+        E("h3", { style: { fontSize: 15, fontWeight: 700, color: "#1B4F8A" } }, OD_LABEL[kind], editId ? "（編集中）" : "（新規）"),
+        E("button", { className: "btn btn-secondary btn-sm", style: { marginLeft: "auto" }, onClick: function () { setKind(""); setEditId(null); } }, "閉じる")),
+      grid(common), grid(spec), grid(vetRow),
+      E("datalist", { id: "odSex" }, ["牝", "牡", "セン"].map(function (x) { return E("option", { key: x, value: x }); })),
+      E("datalist", { id: "odTo" }, ["保険（三井住友海上）", "保険（損保ジャパン）", "株式会社ジェイエス", "繁殖牝馬セール主催者"].map(function (x) { return E("option", { key: x, value: x }); })),
+      E("datalist", { id: "odRes" }, ["受胎（妊娠）を確認した", "受胎（妊娠）を確認できなかった"].map(function (x) { return E("option", { key: x, value: x }); })),
+      E("datalist", { id: "odHba" }, ["トレーニングセール", "セレクションセール", "サマーセール", "オータムセール", "繁殖馬セール"].map(function (x) { var v = "北海道" + x + todayJST().slice(0, 4); return E("option", { key: x, value: v }); })),
+      E("datalist", { id: "odSel" }, ["（1歳）", "（当歳）"].map(function (x) { var v = "セレクトセール" + todayJST().slice(0, 4) + x; return E("option", { key: x, value: v }); })),
+      E("div", { style: { display: "flex", gap: 8, marginTop: 6 } },
+        E("button", { className: "btn btn-primary", onClick: function () { save(true); } }, "保存して印刷"),
+        E("button", { className: "btn btn-secondary", onClick: function () { save(false); } }, "保存だけ"),
+        E("button", { className: "btn btn-secondary", onClick: function () { odPrint(kind, f); } }, "印刷プレビュー（保存しない）")));
+  }
+  return E("div", null,
+    E("h2", { style: { fontSize: 16, fontWeight: 700, marginBottom: 4 } }, "その他の書類"),
+    E("p", { style: { fontSize: 12, color: "#6b7280", marginBottom: 10 } }, "作る書類を選んでください。登録馬を選ぶと情報が自動で入り、A4で印刷できます（印刷画面で「PDFに保存」も可）。"),
+    E("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 16 } },
+      OD_KINDS.map(function (d) {
+        return E("button", { key: d.k, onClick: function () { start(d.k); }, className: "card", style: { padding: 14, textAlign: "left", cursor: "pointer", border: kind === d.k ? "2px solid #1B4F8A" : "1px solid #e5e7eb", background: kind === d.k ? "#eef4fb" : "#fff" } },
+          E("div", { style: { fontSize: 20, marginBottom: 4 } }, d.icon), E("div", { style: { fontSize: 13, fontWeight: 700 } }, d.t), E("div", { style: { fontSize: 11, color: "#6b7280", marginTop: 2 } }, d.d));
+      })),
+    form,
+    E("h3", { style: { fontSize: 14, fontWeight: 700, margin: "6px 0 6px" } }, "発行履歴（", docs.length, "件）"),
+    E("div", { className: "card", style: { overflow: "auto", maxHeight: "50vh" } },
+      E("table", null,
+        E("thead", null, E("tr", { style: { background: "#f9fafb" } }, ["発行日", "書類", "馬名", "提出先・市場", "獣医師", ""].map(function (t, i) { return E("th", { key: i }, t); }))),
+        E("tbody", null, docs.length ? docs.slice().sort(function (a, b) { return (b.date || "").localeCompare(a.date || "") || (b.savedAt || "").localeCompare(a.savedAt || ""); }).map(function (d) {
+          return E("tr", { key: d.id },
+            E("td", { style: { fontSize: 12, whiteSpace: "nowrap" } }, (d.date || "").replace(/-/g, "/")),
+            E("td", { style: { fontSize: 12 } }, OD_LABEL[d.kind] || d.kind),
+            E("td", { style: { fontWeight: 700 } }, d.horse),
+            E("td", { style: { fontSize: 12 } }, (d.data && (d.data.sale || d.data.to)) || ""),
+            E("td", { style: { fontSize: 12 } }, d.vet || ""),
+            E("td", { style: { whiteSpace: "nowrap" } },
+              E("button", { className: "btn btn-secondary btn-sm", onClick: function () { odPrint(d.kind, d.data); } }, "印刷"), " ",
+              E("button", { className: "btn btn-secondary btn-sm", onClick: function () { setKind(d.kind); setEditId(d.id); setF(Object.assign(odDefaults(d.kind, props.currentVet), d.data)); setHq(d.horse); window.scrollTo(0, 0); } }, "開く"), " ",
+              E("button", { className: "btn btn-secondary btn-sm", style: { color: "#b91c1c" }, onClick: function () { if (confirm(d.horse + " の" + (OD_LABEL[d.kind] || "書類") + "を履歴から削除しますか？")) props.onUpdateOtherDocs(docs.filter(function (x) { return x.id !== d.id; })); } }, "削除")));
+        }) : E("tr", null, E("td", { colSpan: 6, style: { textAlign: "center", color: "#9ca3af", padding: 18 } }, "まだ発行した書類はありません"))))));
+}
+function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, currentVet, onToggleReportDone, onToggleCertDone, insuranceList, onUpdateInsuranceList, otherDocs, onUpdateOtherDocs }) {
   const [certMode, setCertMode] = useState(null);
   const [certHorse, setCertHorse] = useState("");
   const [certSex, setCertSex] = useState("牡（せん）");
@@ -12602,18 +12757,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
       )
     ),
 
-    // === Other documents (placeholder) ===
-    docTab === "other" && React.createElement("h2", {style:{fontSize:15,fontWeight:600,marginBottom:12,color:"#6b7280"}}, "その他の書類"),
-    docTab === "other" && React.createElement("div", {style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
-      [{icon:"❤️",t:"健康診断書",d:"健康状態証明"},{icon:"💉",t:"予防接種証明",d:"ワクチン接種履歴"}].map(d =>
-        React.createElement("div", {key:d.t,className:"card",style:{padding:16,opacity:0.6}},
-          React.createElement("div", {style:{fontSize:22,marginBottom:6}}, d.icon),
-          React.createElement("h3", {style:{fontSize:13,fontWeight:600,marginBottom:4}}, d.t),
-          React.createElement("p", {style:{fontSize:11,color:"#9ca3af"}}, d.d),
-          React.createElement("div", {style:{fontSize:10,color:"#d1d5db",marginTop:6}}, "準備中")
-        )
-      )
-    )
+    docTab === "other" && React.createElement(OtherDocsPanel, { horses: horses, farms: farms, cases: cases, currentVet: currentVet, otherDocs: otherDocs, onUpdateOtherDocs: onUpdateOtherDocs })
   );
 }
 
@@ -13057,7 +13201,8 @@ function App() {
   // 予定入力のボタン用：カルテ件数の多い牧場を上位8件（2026-11-14 院長指示）
   const topFarmNames = React.useMemo(() => { const n = {}; cases.forEach(c => { if (c.farmId) n[c.farmId] = (n[c.farmId] || 0) + 1; }); return (farms || []).slice().sort((a, b) => (n[b.id] || 0) - (n[a.id] || 0)).slice(0, 8).map(f => f.name).filter(Boolean); }, [farms, cases]);
   const [calCfg, setCalCfg] = useState(() => effectiveData?.calCfg || {});   // Googleカレンダー連携の設定（URLと合言葉。公開HTMLには書かない）
-  const [todos, setTodos] = useState(() => effectiveData?.todos || []);   // ダッシュボードのToDo（全端末で共有）
+  const [todos, setTodos] = useState(() => effectiveData?.todos || []);
+  const [otherDocs, setOtherDocs] = useState(() => effectiveData?.otherDocs || []);   // その他の書類（受胎証明書・欠場診断書など）の発行履歴   // ダッシュボードのToDo（全端末で共有）
   const [memoMode, setMemoMode] = useState(() => (location.hash || "").indexOf("memo") >= 0);
   React.useEffect(() => { const h = () => setMemoMode((location.hash || "").indexOf("memo") >= 0); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
   const [editingCase, setEditingCase] = useState(null);
@@ -13131,6 +13276,7 @@ function App() {
     registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
     registerRemoteUpdateCallback("memos", function(d) { setMemos(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("todos", function(d) { setTodos(Array.isArray(d) ? d : []); });
+    registerRemoteUpdateCallback("otherDocs", function(d) { setOtherDocs(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("calCfg", function(d) { setCalCfg(d && typeof d === "object" ? d : {}); });
     registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
     // v2: カルテ・馬は1件ずつ受信して state に差し込む（配列まるごとの置き換えはしない）
@@ -13197,6 +13343,7 @@ function App() {
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("insuranceList", insuranceList); }, [insuranceList]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("memos", memos); }, [memos]);
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("todos", todos); }, [todos]);
+  React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("otherDocs", otherDocs); }, [otherDocs]);
   // Claude（Cowork）がメモをカルテ化するための入口（ログイン済みの本番画面でのみ使う）
   React.useEffect(() => { window.__emr = { saveCase, setCases, setHorses, setFarms, setMemos, getMemos: () => memos, getState: () => ({farms, horses, drugsMaster, treatmentsMaster, cases, memos, vets, currentVet}), newRecordId, newRowId, getSyncReport }; });
   React.useEffect(() => { if (FIREBASE_ENABLED) firestoreWrite("vets", vets); }, [vets]);
@@ -13928,7 +14075,9 @@ function App() {
             setCases(prev => prev.map(c => c.id === caseId ? {...c, certDone: done} : c));
           },
           insuranceList: insuranceList,
-          onUpdateInsuranceList: setInsuranceList
+          onUpdateInsuranceList: setInsuranceList,
+          otherDocs: otherDocs,
+          onUpdateOtherDocs: setOtherDocs
         });
       case "billing":
         return /*#__PURE__*/React.createElement(BillingPage, {
