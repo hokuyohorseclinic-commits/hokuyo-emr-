@@ -374,7 +374,7 @@ var SYNC_COLLECTION = "clinicData";
 var SYNC_FIELDS = [
   "drugsMaster", "treatmentsMaster",
   "breedingTreatments", "payments", "billingActual",
-  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos", "todos"
+  "purchaseHistory", "closedMonths", "insuranceList", "vets", "memos", "todos", "calCfg"
 ];
 
 // ─── 従来方式の書き込み（デバウンス付き） ───
@@ -2475,10 +2475,119 @@ function TodoCard(props) {
     E("div", { style: { maxHeight: 220, overflowY: "auto" } }, open.map(row), showDone ? done.map(row) : null),
     showDone && done.length ? E("div", { style: { textAlign: "right", marginTop: 6 } }, E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { upd(open); setShowDone(false); } }, "完了したものを消す")) : null);
 }
+// ═══ ダッシュボード: Googleカレンダー（表示＋追加・削除）（2026-11-14 院長指示）═══
+var CAL_COLORS = ["#20A6A2", "#1B4F8A"];
+function cpad2(n) { return (n < 10 ? "0" : "") + n; }
+function cymd(y, m, d) { return y + "-" + cpad2(m + 1) + "-" + cpad2(d); }
+function CalendarCard(props) {
+  var E = React.createElement;
+  var cfg = props.cfg || {};
+  var now = new Date();
+  var a = React.useState([now.getFullYear(), now.getMonth()]), ym = a[0], setYm = a[1];
+  var b = React.useState(null), evs = b[0], setEvs = b[1];
+  var c = React.useState(""), err = c[0], setErr = c[1];
+  var d = React.useState(todayJST()), sel = d[0], setSel = d[1];
+  var e2 = React.useState(false), busy = e2[0], setBusy = e2[1];
+  var f2 = React.useState({ t: "", st: "09:00", et: "10:00", all: false, cal: 0 }), form = f2[0], setForm = f2[1];
+  var api = function (body) {
+    if (!cfg.url || !cfg.token) return Promise.reject(new Error("未設定"));
+    return fetch(cfg.url, { method: "POST", body: JSON.stringify(Object.assign({ k: cfg.token }, body)) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error || "失敗"); return j; });
+  };
+  var load = function (y, m) {
+    setErr("");
+    var from = cymd(y, m, 1);
+    var last = new Date(y, m + 1, 0).getDate();
+    api({ action: "list", from: from, to: cymd(y, m, last) })
+      .then(function (j) { setEvs(j.events || []); })
+      .catch(function (x) { setEvs([]); setErr(x.message === "未設定" ? "カレンダー未設定" : "カレンダーを読み込めませんでした"); });
+  };
+  React.useEffect(function () { load(ym[0], ym[1]); }, [ym[0], ym[1], cfg.url]);
+  var move = function (n) {
+    var y = ym[0], m = ym[1] + n;
+    if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
+    setYm([y, m]);
+  };
+  var evOf = function (ds2) { return (evs || []).filter(function (x) { return x.sd <= ds2 && ds2 <= (x.ed || x.sd); }); };
+  var add = function () {
+    var t = (form.t || "").trim();
+    if (!t) { setErr("予定名を入れてください"); return; }
+    setBusy(true); setErr("");
+    api({ action: "add", cal: form.cal, title: t, date: sel, allDay: !!form.all, start: form.st, end: form.et })
+      .then(function () { setForm(Object.assign({}, form, { t: "" })); load(ym[0], ym[1]); })
+      .catch(function (x) { setErr("追加できませんでした（" + x.message + "）"); })
+      .then(function () { setBusy(false); });
+  };
+  var del = function (ev) {
+    if (!window.confirm("「" + ev.t + "」を削除しますか？\nGoogleカレンダーからも消えます。")) return;
+    setBusy(true); setErr("");
+    api({ action: "del", cal: ev.c, id: ev.id })
+      .then(function () { load(ym[0], ym[1]); })
+      .catch(function (x) { setErr("削除できませんでした（" + x.message + "）"); })
+      .then(function () { setBusy(false); });
+  };
+  var today = todayJST();
+  var first = new Date(ym[0], ym[1], 1).getDay();
+  var last = new Date(ym[0], ym[1] + 1, 0).getDate();
+  var cells = [];
+  for (var i = 0; i < first; i++) cells.push(null);
+  for (var k = 1; k <= last; k++) cells.push(cymd(ym[0], ym[1], k));
+  while (cells.length % 7) cells.push(null);
+  var wk = ["日", "月", "火", "水", "木", "金", "土"];
+  var inp = { fontSize: 13, padding: "6px 8px", minHeight: 36, boxSizing: "border-box" };
+  return E("div", { className: "card", style: { padding: 14, marginBottom: 16 } },
+    E("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
+      E("div", { style: { fontWeight: 700, fontSize: 14, color: "#1B4F8A" } }, "📅 予定"),
+      E("button", { className: "btn btn-sm btn-secondary", onClick: function () { move(-1); } }, "◀"),
+      E("div", { style: { fontWeight: 700, fontSize: 15, minWidth: 100, textAlign: "center" } }, ym[0] + "年" + (ym[1] + 1) + "月"),
+      E("button", { className: "btn btn-sm btn-secondary", onClick: function () { move(1); } }, "▶"),
+      E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { setYm([now.getFullYear(), now.getMonth()]); setSel(today); } }, "今月"),
+      E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { load(ym[0], ym[1]); } }, "更新"),
+      err ? E("div", { style: { fontSize: 12, color: "#b45309" } }, err) : null),
+    E("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 } },
+      wk.map(function (w, i) { return E("div", { key: "w" + i, style: { textAlign: "center", fontSize: 11, fontWeight: 700, padding: "2px 0", color: i === 0 ? "#dc2626" : i === 6 ? "#2563eb" : "#6b7280" } }, w); }),
+      cells.map(function (ds2, i) {
+        if (!ds2) return E("div", { key: "e" + i });
+        var list = evOf(ds2);
+        var isT = ds2 === today, isS = ds2 === sel;
+        return E("div", { key: ds2, onClick: function () { setSel(ds2); },
+          style: { minHeight: 62, padding: 3, borderRadius: 6, cursor: "pointer", background: isS ? "#e0f2f1" : isT ? "#fffbeb" : "#f9fafb", border: isS ? "2px solid #20A6A2" : isT ? "1px solid #fcd34d" : "1px solid #f3f4f6", overflow: "hidden" } },
+          E("div", { style: { fontSize: 11, fontWeight: 700, color: i % 7 === 0 ? "#dc2626" : i % 7 === 6 ? "#2563eb" : "#374151" } }, Number(ds2.slice(8))),
+          list.slice(0, 3).map(function (x, j) {
+            return E("div", { key: j, title: x.t, style: { fontSize: 10, lineHeight: 1.35, color: "#fff", background: CAL_COLORS[x.c] || "#6b7280", borderRadius: 3, padding: "0 3px", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, (x.a ? "" : x.st + " ") + x.t);
+          }),
+          list.length > 3 ? E("div", { style: { fontSize: 10, color: "#6b7280", paddingLeft: 2 } }, "他" + (list.length - 3) + "件") : null);
+      })),
+    E("div", { style: { marginTop: 10, borderTop: "1px solid #f3f4f6", paddingTop: 8 } },
+      E("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, sel.replace(/-/g, "/"), " の予定"),
+      evOf(sel).length === 0 ? E("div", { style: { fontSize: 12, color: "#9ca3af", marginBottom: 6 } }, "予定はありません")
+        : E("div", { style: { marginBottom: 6 } }, evOf(sel).map(function (x, j) {
+            return E("div", { key: j, style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f9fafb" } },
+              E("span", { style: { width: 8, height: 8, borderRadius: 4, background: CAL_COLORS[x.c] || "#6b7280", flexShrink: 0 } }),
+              E("span", { style: { fontSize: 12, color: "#6b7280", width: 86, flexShrink: 0 } }, x.a ? "終日" : x.st + "–" + x.et),
+              E("span", { style: { fontSize: 13, flex: 1, minWidth: 0, wordBreak: "break-word" } }, x.t),
+              E("button", { onClick: function () { del(x); }, disabled: busy, title: "削除", style: { border: "none", background: "none", color: "#9ca3af", fontSize: 16, cursor: "pointer", padding: "0 4px", flexShrink: 0 } }, "×"));
+          })),
+      E("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
+        E("input", { className: "inp-sm", value: form.t, placeholder: "予定を入力（例: 岡田スタッド 妊鑑）", style: Object.assign({ flex: "2 1 200px", minWidth: 0 }, inp),
+          onChange: function (ev) { setForm(Object.assign({}, form, { t: ev.target.value })); },
+          onKeyDown: function (ev) { if (ev.key === "Enter" && !ev.nativeEvent.isComposing) { ev.preventDefault(); add(); } } }),
+        E("label", { style: { fontSize: 12, display: "flex", alignItems: "center", gap: 4 } },
+          E("input", { type: "checkbox", checked: !!form.all, onChange: function (ev) { setForm(Object.assign({}, form, { all: ev.target.checked })); }, style: { width: 16, height: 16 } }), "終日"),
+        form.all ? null : E("input", { className: "inp-sm", type: "time", value: form.st, style: Object.assign({ width: 104 }, inp), onChange: function (ev) { setForm(Object.assign({}, form, { st: ev.target.value })); } }),
+        form.all ? null : E("span", { style: { fontSize: 12, color: "#6b7280" } }, "–"),
+        form.all ? null : E("input", { className: "inp-sm", type: "time", value: form.et, style: Object.assign({ width: 104 }, inp), onChange: function (ev) { setForm(Object.assign({}, form, { et: ev.target.value })); } }),
+        E("select", { className: "inp-sm", value: form.cal, style: Object.assign({ width: 130 }, inp), onChange: function (ev) { setForm(Object.assign({}, form, { cal: Number(ev.target.value) })); } },
+          E("option", { value: 0 }, "クリニック"), E("option", { value: 1 }, "もう1つ")),
+        E("button", { className: "btn btn-sm btn-primary", onClick: add, disabled: busy }, busy ? "…" : "追加"))));
+}
 function DashExtras(props) {
-  return React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-start" } },
-    React.createElement(WeatherCard, null),
-    React.createElement(TodoCard, { todos: props.todos, onUpdate: props.onUpdateTodos }));
+  return React.createElement(React.Fragment, null,
+    React.createElement(CalendarCard, { cfg: props.calCfg }),
+    React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-start" } },
+      React.createElement(WeatherCard, null),
+      React.createElement(TodoCard, { todos: props.todos, onUpdate: props.onUpdateTodos })));
 }
 function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone }) {
   const E = React.createElement;
@@ -10362,7 +10471,8 @@ function DashboardPage({
   onUpdateMemos,
   onConfirmDraft,
   todos,
-  onUpdateTodos
+  onUpdateTodos,
+  calCfg
 }) {
   const contCasesAll = cases.filter(c => c.type === "\u4E00\u822C" && c.caseStatus === "\u7D99\u7D9A\u4E2D" && !c.archived);
   const todayStr = todayJST();
@@ -10528,7 +10638,7 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), /*#__PURE__*/React.createElement(DashExtras, {todos: todos, onUpdateTodos: onUpdateTodos}), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
+  }, s.sub)))))), /*#__PURE__*/React.createElement(DashExtras, {todos: todos, onUpdateTodos: onUpdateTodos, calCfg: calCfg}), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
     /*#__PURE__*/React.createElement("div", {style: {padding: "10px 14px", background: "#fffbeb", color: "#92400e", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer"}, onClick: () => setShowCheck(!showCheck)},
       /*#__PURE__*/React.createElement("span", null, (showCheck ? "▾" : "▸") + " ⚠ 確認が必要なカルテ"),
       /*#__PURE__*/React.createElement("span", {className: "badge badge-orange"}, checkItems.length + "件"),
@@ -12710,6 +12820,7 @@ function App() {
   });
   const [insuranceList, setInsuranceList] = useState(() => effectiveData?.insuranceList || []);
   const [memos, setMemos] = useState(() => effectiveData?.memos || []);   // 診療メモ受信箱（携帯から話して保存 → Claudeがカルテ化）
+  const [calCfg, setCalCfg] = useState(() => effectiveData?.calCfg || {});   // Googleカレンダー連携の設定（URLと合言葉。公開HTMLには書かない）
   const [todos, setTodos] = useState(() => effectiveData?.todos || []);   // ダッシュボードのToDo（全端末で共有）
   const [memoMode, setMemoMode] = useState(() => (location.hash || "").indexOf("memo") >= 0);
   React.useEffect(() => { const h = () => setMemoMode((location.hash || "").indexOf("memo") >= 0); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
@@ -12783,6 +12894,7 @@ function App() {
     registerRemoteUpdateCallback("insuranceList", function(d) { setInsuranceList(d); });
     registerRemoteUpdateCallback("memos", function(d) { setMemos(Array.isArray(d) ? d : []); });
     registerRemoteUpdateCallback("todos", function(d) { setTodos(Array.isArray(d) ? d : []); });
+    registerRemoteUpdateCallback("calCfg", function(d) { setCalCfg(d && typeof d === "object" ? d : {}); });
     registerRemoteUpdateCallback("vets", function(d) { setVets(d); });
     // v2: カルテ・馬は1件ずつ受信して state に差し込む（配列まるごとの置き換えはしない）
     const mergeItems = (setter) => (upserts, deletedIds) => setter(prev => {
@@ -13422,6 +13534,7 @@ function App() {
           onUpdateMemos: setMemos,
           todos: todos,
           onUpdateTodos: setTodos,
+          calCfg: calCfg,
           onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
       case "general_batch":
@@ -13772,6 +13885,7 @@ function App() {
           onUpdateMemos: setMemos,
           todos: todos,
           onUpdateTodos: setTodos,
+          calCfg: calCfg,
           onConfirmDraft: (c) => { setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, {draft: false, confirmedAt: new Date().toISOString()}, x.findings ? {findings: x.findings.map(f => f.draft ? Object.assign({}, f, {draft: false}) : f)} : {}) : x)); if (c.memoId) setMemos(prev => prev.map(m => m.id === c.memoId ? Object.assign({}, m, {status: "処理済", processedAt: new Date().toISOString()}) : m)); showToast("下書きを確定しました"); }
         });
     }
