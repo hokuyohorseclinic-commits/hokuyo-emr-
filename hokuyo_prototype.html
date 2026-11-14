@@ -2478,7 +2478,7 @@ function TodoCard(props) {
 // ═══ ダッシュボード: Googleカレンダー（週/2週/月、予定の追加・削除）（2026-11-14 院長指示）═══
 var CAL_COLORS = ["#20A6A2", "#1B4F8A"];
 // 2026-11-14 院長指示: 予定は午前・午後・終日で色分け（もう1つのカレンダーの予定は左に黒い線）
-function calEvColor(x) { if (x.a) return "#9ca3af"; return (x.st || "") < "12:00" ? "#E08A1E" : "#2F6FB5"; }
+function calEvColor(x) { if (x.a) return "#C8504B"; return (x.st || "") < "12:00" ? "#20A6A2" : "#1B4F8A"; }
 var CAL_PROCS = ["妊鑑", "種付", "ワクチン", "削蹄", "往診", "採血", "健診", "レポジトリ", "内視鏡", "レントゲン", "休み"];
 function cpad2(n) { return (n < 10 ? "0" : "") + n; }
 function cymd(y, m, d) { return y + "-" + cpad2(m + 1) + "-" + cpad2(d); }
@@ -2648,7 +2648,7 @@ function CalendarCard(props) {
       E("button", { className: "btn btn-sm btn-secondary", onClick: function () { move(1); } }, "▶"),
       E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { setAnchor(today); setSel(today); } }, "今日"),
       E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: load }, "更新"),
-      E("div", { style: { display: "flex", gap: 8, fontSize: 11, color: "#6b7280", alignItems: "center" } }, [["午前", "#E08A1E"], ["午後", "#2F6FB5"], ["終日", "#9ca3af"]].map(function (p) { return E("span", { key: p[0], style: { display: "inline-flex", alignItems: "center", gap: 3 } }, E("span", { style: { width: 10, height: 10, borderRadius: 2, background: p[1] } }), p[0]); })),
+      E("div", { style: { display: "flex", gap: 8, fontSize: 11, color: "#6b7280", alignItems: "center" } }, [["午前", "#20A6A2"], ["午後", "#1B4F8A"], ["終日", "#C8504B"]].map(function (p) { return E("span", { key: p[0], style: { display: "inline-flex", alignItems: "center", gap: 3 } }, E("span", { style: { width: 10, height: 10, borderRadius: 2, background: p[1] } }), p[0]); })),
       err ? E("div", { style: { fontSize: 12, color: "#b45309" } }, err) : null),
     E("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 } },
       wk.map(function (w, i) { return E("div", { key: "w" + i, style: { textAlign: "center", fontSize: 11, fontWeight: 700, padding: "2px 0", color: i === 0 ? "#dc2626" : i === 6 ? "#2563eb" : "#6b7280" } }, w); }),
