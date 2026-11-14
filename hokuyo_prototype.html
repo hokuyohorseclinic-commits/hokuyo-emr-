@@ -2707,6 +2707,18 @@ function CalendarCard(props) {
         E("input", { className: "inp-sm", value: form.loc, placeholder: "場所", style: Object.assign({ flex: "1 1 140px", minWidth: 0 }, inp), onChange: function (e) { up("loc", e.target.value); } }),
         E("input", { className: "inp-sm", value: form.desc, placeholder: "メモ", style: Object.assign({ flex: "1 1 180px", minWidth: 0 }, inp), onChange: function (e) { up("desc", e.target.value); } })) : null));
 }
+// 2026-11-14 院長指示: 一覧の牧場名を押すとその牧場だけに絞り込む（もう一度押すと解除）、馬名を押すとカルテが開く
+function listFarmCell(name, cur, setCur, style) {
+  var on = !!name && cur === name;
+  return React.createElement("td", { style: Object.assign({ color: "#2563eb" }, style || {}) },
+    name ? React.createElement("span", { title: on ? "絞り込みを解除" : "この牧場だけ表示", onClick: function (e) { e.stopPropagation(); setCur(on ? "" : name); },
+      style: { cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: on ? 700 : "inherit", background: on ? "#dbeafe" : "transparent", borderRadius: 4, padding: on ? "1px 5px" : 0 } }, name) : "\u2014");
+}
+function listHorseName(name, onOpen) {
+  if (!name) return name;
+  return React.createElement("span", { title: "カルテを開く", onClick: function (e) { e.stopPropagation(); onOpen(); },
+    style: { cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 } }, name);
+}
 function DashExtras(props) {
   return React.createElement(React.Fragment, null,
     React.createElement(CalendarCard, { cfg: props.calCfg, farmNames: props.farmNames }),
@@ -5900,7 +5912,7 @@ function BreedingListPage({
     style: {
       fontWeight: 600
     }
-  }, h?.name), isExactly15 && /*#__PURE__*/React.createElement("div", {
+  }, listHorseName(h?.name, () => onOpenCase(c))), isExactly15 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: "#dc2626",
@@ -5911,12 +5923,7 @@ function BreedingListPage({
       fontSize: 10,
       color: "#6b7280"
     }
-  }, "\u2642", c.stallion)), /*#__PURE__*/React.createElement("td", {
-    style: {
-      color: "#2563eb",
-      fontSize: 12
-    }
-  }, f?.name), /*#__PURE__*/React.createElement("td", null, situation ? /*#__PURE__*/React.createElement("span", {
+  }, "\u2642", c.stallion)), listFarmCell(f?.name, filterFarm, setFilterFarm, { fontSize: 12 }), /*#__PURE__*/React.createElement("td", null, situation ? /*#__PURE__*/React.createElement("span", {
     className: `badge badge-${statusColors[situation] || "gray"}`
   }, situation) : /*#__PURE__*/React.createElement("span", {
     className: `badge badge-${statusColors[c.breedingStatus] || "gray"}`
@@ -11049,7 +11056,7 @@ function KarteListPage({
   const [klSearch, setKlSearch] = useState("");
   const [klFarm, setKlFarm] = useState("");
   const [klYear, setKlYear] = useState(new Date().getFullYear().toString());
-  const [klMonth, setKlMonth] = useState("");
+  const [klMonth, setKlMonth] = useState(() => todayJST().slice(5, 7));   // 今月から開く
   const [klSort, setKlSort] = useState("date");
   const [klDir, setKlDir] = useState("desc");
   const allKartes = useMemo(() => cases.map(c => {
@@ -11486,17 +11493,12 @@ function KarteListPage({
       style: {
         fontWeight: 600
       }
-    }, h?.name || /*#__PURE__*/React.createElement("span", {
+    }, h ? listHorseName(h.name, () => onOpenCase(c)) : /*#__PURE__*/React.createElement("span", {
       style: {
         color: "#9ca3af",
         fontSize: 11
       }
-    }, "\uFF08\u99AC\u306A\u3057\uFF09")), /*#__PURE__*/React.createElement("td", {
-      style: {
-        color: "#2563eb",
-        fontSize: 12
-      }
-    }, f?.name || "—"), /*#__PURE__*/React.createElement("td", {
+    }, "\uFF08\u99AC\u306A\u3057\uFF09")), listFarmCell(f?.name, klFarm, setKlFarm, { fontSize: 12 }), /*#__PURE__*/React.createElement("td", {
       style: {
         fontSize: 12,
         maxWidth: 220,
@@ -12977,7 +12979,7 @@ function App() {
   const [gFilterFarm, setGFilterFarm] = useState("");
   const [gFilterStatus, setGFilterStatus] = useState("");
   const [gFilterBilling, setGFilterBilling] = useState("");
-  const [gFilterMonth, setGFilterMonth] = useState("");
+  const [gFilterMonth, setGFilterMonth] = useState(() => todayJST().slice(0, 7));   // 2026-11-14 院長指示: 一覧は今月から開く
   const [gFilterVet, setGFilterVet] = useState("");
   const [bFilterVet, setBFilterVet] = useState("");
   const [pFilterVet, setPFilterVet] = useState("");
@@ -14366,11 +14368,7 @@ function App() {
       style: {
         fontWeight: 600
       }
-    }, h?.name), /*#__PURE__*/React.createElement("td", {
-      style: {
-        color: "#2563eb"
-      }
-    }, f?.name), /*#__PURE__*/React.createElement("td", {
+    }, listHorseName(h?.name, () => openCase(c))), listFarmCell(f?.name, gFilterFarm, setGFilterFarm), /*#__PURE__*/React.createElement("td", {
       style: {
         fontWeight: 600
       }
@@ -14429,7 +14427,7 @@ function App() {
     })))));
   }
   const [pFilterFarm, setPFilterFarm] = useState("");
-  const [pFilterMonth, setPFilterMonth] = useState("");
+  const [pFilterMonth, setPFilterMonth] = useState(() => todayJST().slice(0, 7));   // 今月から開く
   const [pSortKey, setPSortKey] = useState("date");
   const [pSortDir, setPSortDir] = useState("desc");
   const pToggleSort = k => { if (pSortKey === k) setPSortDir(d => d === "asc" ? "desc" : "asc"); else { setPSortKey(k); setPSortDir("asc"); }};
@@ -14500,8 +14498,8 @@ function App() {
         /*#__PURE__*/React.createElement("tbody", null, sortedP.map(({c, h, f, t}) =>
           /*#__PURE__*/React.createElement("tr", {key:c.id,onClick:()=>{setEditingCase(c);setPage("pharma_edit");},style:{cursor:"pointer"}},
             /*#__PURE__*/React.createElement("td", null, c.openDate),
-            /*#__PURE__*/React.createElement("td", {style:{fontWeight:600}}, h?.name || /*#__PURE__*/React.createElement("span", {style:{color:"#9ca3af"}}, "\uFF08\u99AC\u306A\u3057\uFF09")),
-            /*#__PURE__*/React.createElement("td", {style:{color:"#2563eb"}}, f?.name || "\u2014"),
+            /*#__PURE__*/React.createElement("td", {style:{fontWeight:600}}, h ? listHorseName(h.name, () => {setEditingCase(c);setPage("pharma_edit");}) : /*#__PURE__*/React.createElement("span", {style:{color:"#9ca3af"}}, "\uFF08\u99AC\u306A\u3057\uFF09")),
+            listFarmCell(f?.name, pFilterFarm, setPFilterFarm),
             /*#__PURE__*/React.createElement("td", {style:{fontSize:11}}, c.pharmaItems?.map((pi,idx) => {
               const d = drugsMaster.find(x=>x.id===pi.drugId);
               if(!d) return null;
