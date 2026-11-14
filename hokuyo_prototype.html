@@ -1726,6 +1726,19 @@ var INIT_CASES=[];
 // 薬品の請求額: 治療使用＝pricePerUnit(円/unit)×数量、単品販売(useRx)＝packPrice(円/packUnit)×数量
 function drugUnitPrice(drug,useRx){ if(!drug) return 0; if(useRx && drug.packPrice) return Number(drug.packPrice)||0; return Number(drug.pricePerUnit)||0; }
 function calcDrugLine(drug,dose,useRx){return drug?Math.round(drugUnitPrice(drug,useRx)*(Number(dose)||0)):0;}
+// 2026-11-14 院長指示: 馬別請求書に「明細も付ける」（カルテの処置・薬品から内訳行を作る。金額は税抜）
+function invDetailRows(it, dm) {
+  if (!window.__invDetail || !it || !it.v) return "";
+  var v = it.v, L = [];
+  if (Number(v.visitFee)) L.push([(v.visitType === "往診" ? "往診料" : "診察料"), Number(v.visitFee)]);
+  (v.treatments || []).forEach(function (t) { L.push([t.name || "処置", Number(t.fee || t.amount || 0)]); });
+  (v.drugs || []).forEach(function (r) { var dr = (dm || []).find(function (x) { return x.id === r.drugId; }); var a = r.fee ? Number(r.fee) : (dr ? calcDrugLine(dr, r.dose, r.useRx) : 0); L.push([(dr ? dr.name : "薬品") + (r.dose ? " ×" + r.dose + (r.unit || (dr && dr.unit) || "") : ""), a]); });
+  if (Number(v.vehicleKm)) L.push(["車両費（" + v.vehicleKm + "km）", Math.round(Number(v.vehicleKm) * 120)]);
+  if (Number(v.adjustFee)) L.push(["調整", Number(v.adjustFee)]);
+  var sum = L.reduce(function (s, x) { return s + x[1]; }, 0);
+  if (v.totalFee && Number(v.totalFee) !== sum) { if (!L.length) L.push(["診療一式", Number(v.totalFee)]); else L.push(["その他（調整）", Number(v.totalFee) - sum]); }
+  return L.map(function (x) { return '<tr><td style="border-bottom:none;padding-top:1px;padding-bottom:1px;"></td><td style="border-bottom:none;padding:1px 8px 1px 26px;font-size:8.5pt;color:#444;">・' + x[0] + '</td><td class="right" style="border-bottom:none;padding-top:1px;padding-bottom:1px;font-size:8.5pt;color:#444;">（税抜 ' + Number(x[1]).toLocaleString() + '円）</td></tr>'; }).join("");
+}
 function calcVisitTotal(v,dm){
 if(v.totalFee)return Number(v.totalFee);
 var viFee=Number(v.visitFee||0);
@@ -7526,7 +7539,7 @@ function BillingPage({
       if (periodVisits.length === 0) return;
       periodVisits.forEach(v => {
         const total = calcVisitTotal(v, drugsMaster);
-        items.push({ date: v.date, desc: diag, treatment: "", amount: total, section: "一般" });
+        items.push({ date: v.date, desc: diag, treatment: "", amount: total, section: "一般", v: v });
       });
     });
 
@@ -7573,14 +7586,14 @@ function BillingPage({
       secItems.forEach(it => {
         const taxIncl = it.amount + Math.floor(it.amount * 0.1);
         const treatmentStr = it.treatment ? ' (' + it.treatment + ')' : '';
-        itemRows += '<tr><td>' + (it.date || "") + '</td><td>' + it.desc + treatmentStr + '</td><td class="right">' + taxIncl.toLocaleString() + '円</td></tr>';
+        itemRows += '<tr><td>' + (it.date || "") + '</td><td>' + it.desc + treatmentStr + '</td><td class="right">' + taxIncl.toLocaleString() + '円</td></tr>' + invDetailRows(it, drugsMaster);
       });
     });
 
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>診療代請求書 - ' + fb.farm.name + ' - ' + h.name + '</title><style>' + pdfStyle + '</style></head><body>' +
     '<div class="no-print"><button onclick="window.print()" style="padding:10px 30px;font-size:14pt;cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;">印刷 / PDF保存</button></div>' +
 
-    '<div class="title-row"><h1>診療代請求書</h1><span class="kind">【 馬 別 】</span><div class="date">' + invoiceDate() + '</div></div>' +
+    '<div class="title-row"><h1>診療代請求書</h1><span class="kind">【 馬 別 ' + (window.__invDetail ? '・ 明 細 ' : '') + '】</span><div class="date">' + invoiceDate() + '</div></div>' +
 
     '<div class="top-section">' +
       '<div class="top-left">' +
@@ -7650,7 +7663,7 @@ function BillingPage({
       fb.generalCases.filter(c => c.horseId === horseId).forEach(c => {
         const diag = c.diagnosis || "診療";
         (c.visits || []).filter(v => visitInPeriod(c, v, fb.period.start, fb.period.end)).forEach(v => {
-          items.push({ date: v.date, desc: diag, treatment: "", amount: calcVisitTotal(v, drugsMaster), section: "一般" });
+          items.push({ date: v.date, desc: diag, treatment: "", amount: calcVisitTotal(v, drugsMaster), section: "一般", v: v });
         });
       });
       fb.breedingCases.filter(c => c.horseId === horseId).forEach(c => {
@@ -7685,12 +7698,12 @@ function BillingPage({
         secItems.forEach(it => {
           const taxIncl = it.amount + Math.floor(it.amount * 0.1);
           const treatmentStr = it.treatment ? ' (' + it.treatment + ')' : '';
-          itemRows += '<tr><td>' + (it.date || "") + '</td><td>' + it.desc + treatmentStr + '</td><td class="right">' + taxIncl.toLocaleString() + '円</td></tr>';
+          itemRows += '<tr><td>' + (it.date || "") + '</td><td>' + it.desc + treatmentStr + '</td><td class="right">' + taxIncl.toLocaleString() + '円</td></tr>' + invDetailRows(it, drugsMaster);
         });
       });
       if (idx > 0) allPages += '<div class="page-break"></div>';
       allPages +=
-        '<div class="title-row"><h1>診療代請求書</h1><span class="kind">【 馬 別 】</span><div class="date">' + invoiceDate() + '</div></div>' +
+        '<div class="title-row"><h1>診療代請求書</h1><span class="kind">【 馬 別 ' + (window.__invDetail ? '・ 明 細 ' : '') + '】</span><div class="date">' + invoiceDate() + '</div></div>' +
         '<div class="top-section">' +
           '<div class="top-left">' +
             '<div class="farm-code">' + fb.farm.id + '</div>' +
@@ -7982,7 +7995,7 @@ function BillingPage({
           justifyContent: "space-between",
           alignItems: "center"
         }
-      }, /*#__PURE__*/React.createElement("span", null, "\u99AC\u5225\u8ACB\u6C42"), checkedCount > 0 && /*#__PURE__*/React.createElement("button", {
+      }, /*#__PURE__*/React.createElement("span", null, "\u99AC\u5225\u8ACB\u6C42", React.createElement("label", {style:{marginLeft:12,fontWeight:500,fontSize:11,color:"#374151",cursor:"pointer"}, title:"カルテの処置・薬品・往診料などの内訳を馬別請求書に追加します"}, React.createElement("input", {type:"checkbox", defaultChecked: !!window.__invDetail, onChange: e => { window.__invDetail = e.target.checked; }, style:{marginRight:4,verticalAlign:"middle"}}), "明細も付ける")), checkedCount > 0 && /*#__PURE__*/React.createElement("button", {
         className: "btn btn-sm",
         style: { background: "#7c3aed", color: "#fff", padding: "5px 16px", fontSize: 11, fontWeight: 700 },
         onClick: () => printBatchHorseInvoices(fb, horseIds.filter(id => farmChecked.has(id)))
