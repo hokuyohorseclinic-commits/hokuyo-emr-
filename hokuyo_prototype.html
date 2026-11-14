@@ -2708,6 +2708,13 @@ function CalendarCard(props) {
         E("input", { className: "inp-sm", value: form.desc, placeholder: "メモ", style: Object.assign({ flex: "1 1 180px", minWidth: 0 }, inp), onChange: function (e) { up("desc", e.target.value); } })) : null));
 }
 // 2026-11-14 院長指示: 一覧の牧場名を押すとその牧場だけに絞り込む（もう一度押すと解除）、馬名を押すとカルテが開く
+// 2026-11-14 院長指示: 牧場で絞り込んだとき、全部の牧場に戻すボタンを押しやすい所（画面上部に固定）に出す
+function listFarmBanner(name, onClear) {
+  if (!name) return null;
+  return React.createElement("div", { style: { position: "sticky", top: 0, zIndex: 20, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#1B4F8A", color: "#fff", padding: "8px 12px", borderRadius: 8, marginBottom: 8, boxShadow: "0 2px 8px rgba(0,0,0,.18)" } },
+    React.createElement("span", { style: { fontSize: 14 } }, "🏠 ", React.createElement("b", null, name), " だけを表示中"),
+    React.createElement("button", { onClick: onClear, style: { marginLeft: "auto", background: "#fff", color: "#1B4F8A", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 40 } }, "← 全部の牧場に戻る"));
+}
 function listFarmCell(name, cur, setCur, style) {
   var on = !!name && cur === name;
   return React.createElement("td", { title: name ? (on ? "絞り込みを解除" : "この牧場だけ表示") : "", onClick: name ? function (e) { e.stopPropagation(); setCur(on ? "" : name); } : undefined,
@@ -5813,7 +5820,7 @@ function BreedingListPage({
       alignItems: "center",
       flexWrap: "wrap"
     }
-  }, /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#3b82f6",borderRadius:2}}), "blue = \u672C\u65E5\u8A3A\u7642\u3042\u308A"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#22c55e",borderRadius:2}}), "green = \u6B21\u56DE\u4E88\u5B9A\u3042\u308A"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#f59e0b",borderRadius:2}}), "yellow = \u9451\u5B9A\u6642\u671F"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#fafafa",border:"1px solid #d1d5db",borderRadius:2}}), "gray = \u904E\u53BB\uff08\u4E88\u5B9A\u306A\u3057\uff09")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#3b82f6",borderRadius:2}}), "blue = \u672C\u65E5\u8A3A\u7642\u3042\u308A"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#22c55e",borderRadius:2}}), "green = \u6B21\u56DE\u4E88\u5B9A\u3042\u308A"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#f59e0b",borderRadius:2}}), "yellow = \u9451\u5B9A\u6642\u671F"), /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}}, /*#__PURE__*/React.createElement("div", {style:{width:12,height:12,background:"#fafafa",border:"1px solid #d1d5db",borderRadius:2}}), "gray = \u904E\u53BB\uff08\u4E88\u5B9A\u306A\u3057\uff09")), listFarmBanner(filterFarm, () => setFilterFarm("")), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       overflow: "auto"
@@ -11057,7 +11064,7 @@ function KarteListPage({
   const [klSearch, setKlSearch] = useState("");
   const [klFarm, setKlFarm] = useState("");
   const [klYear, setKlYear] = useState(new Date().getFullYear().toString());
-  const [klMonth, setKlMonth] = useState(() => todayJST().slice(5, 7));   // 今月から開く
+  const [klMonth, setKlMonth] = useState("");   // 2026-11-14 院長指示: カルテ一覧は月ごとの金額が見える元の表示（全月）で開く
   const [klSort, setKlSort] = useState("date");
   const [klDir, setKlDir] = useState("desc");
   const allKartes = useMemo(() => cases.map(c => {
@@ -11399,7 +11406,7 @@ function KarteListPage({
       color: "#9ca3af",
       marginTop: 2
     }
-  }, klTab === "all" && /*#__PURE__*/React.createElement("span", null, "\u822C", ms.general, " \u7E41", ms.breeding, " \u85AC", ms.pharma))))), /*#__PURE__*/React.createElement("div", {
+  }, klTab === "all" && /*#__PURE__*/React.createElement("span", null, "\u822C", ms.general, " \u7E41", ms.breeding, " \u85AC", ms.pharma))))), listFarmBanner(klFarm, () => setKlFarm("")), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       overflow: "auto",
@@ -12980,6 +12987,7 @@ function App() {
   const [gFilterFarm, setGFilterFarm] = useState("");
   const [gFilterStatus, setGFilterStatus] = useState("");
   const [gFilterBilling, setGFilterBilling] = useState("");
+  const [gFilterYear, setGFilterYear] = useState(() => todayJST().slice(0, 4));   // 一般診療一覧は年→月で選ぶ（2026-11-14）
   const [gFilterMonth, setGFilterMonth] = useState(() => todayJST().slice(0, 7));   // 2026-11-14 院長指示: 一覧は今月から開く
   const [gFilterVet, setGFilterVet] = useState("");
   const [bFilterVet, setBFilterVet] = useState("");
@@ -14055,10 +14063,12 @@ function App() {
       };
     });
     const gMonths = [...new Set(enriched.map(e => e.mm).filter(Boolean))].sort().reverse();
+    const gYears = [...new Set(gMonths.map(m => m.slice(0, 4)).concat([todayJST().slice(0, 4)]))].sort().reverse();
     const filtered = enriched.filter(e => {
       if (gFilterFarm && e.f?.name !== gFilterFarm) return false;
       if (gFilterStatus && e.c.caseStatus !== gFilterStatus) return false;
       if (gFilterBilling && e.bc !== gFilterBilling) return false;
+      if (gFilterYear && !(e.mm || "").startsWith(gFilterYear)) return false;
       if (gFilterMonth && e.mm !== gFilterMonth) return false;
       if (gFilterVet && (e.c.vet || "佐藤") !== gFilterVet) return false;
       return true;
@@ -14231,38 +14241,43 @@ function App() {
         color: "#6b7280",
         fontWeight: 600
       }
-    }, "\u6708:"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: 3,
-        flexWrap: "wrap"
-      }
-    }, /*#__PURE__*/React.createElement("button", {
+    }, "\u5E74\u30FB\u6708:"), /*#__PURE__*/React.createElement("div", {
+      style: { display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }
+    }, gYears.map(y => /*#__PURE__*/React.createElement("button", {
+      key: "y" + y,
+      onClick: () => { setGFilterYear(y); setGFilterMonth(""); },
+      className: `tab-btn ${gFilterYear === y ? "active" : ""}`,
+      style: { padding: "3px 12px", fontSize: 12, fontWeight: 700 }
+    }, y, "\u5E74")), /*#__PURE__*/React.createElement("button", {
+      onClick: () => { setGFilterYear(""); setGFilterMonth(""); },
+      className: `tab-btn ${gFilterYear === "" ? "active" : ""}`,
+      style: { padding: "3px 10px", fontSize: 11 }
+    }, "\u5168\u671F\u9593"), gFilterYear && /*#__PURE__*/React.createElement("span", { style: { width: 1, height: 18, background: "#d1d5db", margin: "0 4px" } }), gFilterYear && /*#__PURE__*/React.createElement("button", {
       onClick: () => setGFilterMonth(""),
       className: `tab-btn ${gFilterMonth === "" ? "active" : ""}`,
-      style: {
-        padding: "3px 10px",
-        fontSize: 11
-      }
-    }, "\u5168\u6708"), gMonths.map(m => /*#__PURE__*/React.createElement("button", {
-      key: m,
-      onClick: () => setGFilterMonth(gFilterMonth === m ? "" : m),
-      className: `tab-btn ${gFilterMonth === m ? "active" : ""}`,
-      style: {
-        padding: "3px 10px",
-        fontSize: 11
-      }
-    }, Number(m.split("-")[1]), "\u6708")))),
+      style: { padding: "3px 10px", fontSize: 11 }
+    }, "\u5168\u6708"), gFilterYear && [1,2,3,4,5,6,7,8,9,10,11,12].map(n => {
+      const m = gFilterYear + "-" + (n < 10 ? "0" : "") + n;
+      const has = gMonths.indexOf(m) >= 0;
+      return /*#__PURE__*/React.createElement("button", {
+        key: m,
+        disabled: !has,
+        onClick: () => setGFilterMonth(gFilterMonth === m ? "" : m),
+        className: `tab-btn ${gFilterMonth === m ? "active" : ""}`,
+        style: { padding: "3px 9px", fontSize: 11, opacity: has ? 1 : 0.35, cursor: has ? "pointer" : "default" }
+      }, n, "\u6708");
+    }))),
     /*#__PURE__*/React.createElement("div", {style:{display:"flex",alignItems:"center",gap:4}},
       /*#__PURE__*/React.createElement("span", {style:{fontSize:12,color:"#6b7280",fontWeight:600}}, "獣医師:"),
       /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:3}},
         /*#__PURE__*/React.createElement("button", {onClick:()=>setGFilterVet(""),className:`tab-btn ${gFilterVet===""?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, "全て"),
         vets.map(v => /*#__PURE__*/React.createElement("button", {key:v,onClick:()=>setGFilterVet(gFilterVet===v?"":v),className:`tab-btn ${gFilterVet===v?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, v)))),
-    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterMonth || gFilterVet) && /*#__PURE__*/React.createElement("button", {
+    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterMonth || gFilterYear || gFilterVet) && /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         setGFilterFarm("");
         setGFilterStatus("");
         setGFilterBilling("");
+        setGFilterYear("");
         setGFilterMonth("");
         setGFilterVet("");
       },
@@ -14273,7 +14288,7 @@ function App() {
         border: "none",
         cursor: "pointer"
       }
-    }, "\xD7 \u30EA\u30BB\u30C3\u30C8")), /*#__PURE__*/React.createElement("div", {
+    }, "\xD7 \u30EA\u30BB\u30C3\u30C8")), listFarmBanner(gFilterFarm, () => setGFilterFarm("")), /*#__PURE__*/React.createElement("div", {
       className: "card",
       style: {
         overflow: "auto"
@@ -14487,6 +14502,7 @@ function App() {
           /*#__PURE__*/React.createElement("button", {onClick:()=>setPFilterVet(""),className:`tab-btn ${pFilterVet===""?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, "全て"),
           vets.map(v => /*#__PURE__*/React.createElement("button", {key:v,onClick:()=>setPFilterVet(pFilterVet===v?"":v),className:`tab-btn ${pFilterVet===v?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, v)))),
       (pFilterFarm || pFilterMonth || pFilterVet) && /*#__PURE__*/React.createElement("button", {onClick:()=>{setPFilterFarm("");setPFilterMonth("");setPFilterVet("");},style:{fontSize:11,color:"#ef4444",background:"none",border:"none",cursor:"pointer"}}, "\xD7 \u30D5\u30A3\u30EB\u30BF\u89E3\u9664")),
+    listFarmBanner(pFilterFarm, () => setPFilterFarm("")),
     /*#__PURE__*/React.createElement("div", {className:"card",style:{overflow:"auto"}},
       /*#__PURE__*/React.createElement("table", null,
         /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {style:{background:"#f9fafb"}},
