@@ -12365,7 +12365,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
     onBulkDone ? E("button", {onClick:()=>{ const shown = applyListFilters(rows).filter(x=>!x.done); if (!shown.length) return; if (confirm("表示中の未完了 " + shown.length + " 件をすべて「済」にしますか？")) onBulkDone(shown); }, style:{marginLeft:"auto",fontSize:11,padding:"4px 10px",border:"1px solid #22c55e",borderRadius:6,background:"#f0fdf4",color:"#16a34a",cursor:"pointer",fontWeight:600}}, "表示中を全て ✓済") : null
   );
   const docTabBar = E("div", {style:{display:"flex",gap:4,marginBottom:16,background:"#f3f4f6",padding:4,borderRadius:10,width:"fit-content"}},
-    [{id:"ins", l:"🏥 保険診断", n:(insuranceList||[]).length, p:insPending.length},
+    [{id:"ins", l:"🏥 保険診断", n:null, p:0},
      {id:"repo", l:"🔬 レポジトリー", n:repoKartes.length, p:repoPending.length},
      {id:"cast", l:"✂️ 去勢証明", n:castrationKartes.length, p:castrationPending.length},
      {id:"other", l:"その他", n:null, p:0}].map(t => E("button", {key:t.id, onClick:()=>{ setDocTab(t.id); setDocSearch(""); setDocShow("all"); setDocYear(""); }, className:"tab-btn " + (docTab === t.id ? "active" : "")}, t.l, t.n != null ? "(" + t.n + ")" : "", t.p > 0 ? E("span", {style:{marginLeft:6,background:"#f59e0b",color:"#fff",borderRadius:10,padding:"0 6px",fontSize:10,fontWeight:700}}, t.p) : null)));
@@ -12394,7 +12394,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
 
     // === 保険診断書リスト ===
     docTab === "ins" && React.createElement(InsuranceLedger, null),
-    docTab === "ins" && React.createElement("div", {style:{marginBottom:24}},
+    false && /* 2026-11-14 院長指示: 旧「競走馬保険診断リスト」は上の保険アプリ一覧で足りるので非表示（データは残す） */ React.createElement("div", {style:{marginBottom:24}},
       React.createElement("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
         React.createElement("div", null,
           React.createElement("h2", {style:{fontSize:16,fontWeight:700,marginBottom:2}}, "🏥 競走馬保険診断リスト（診断した馬の一覧）"),
