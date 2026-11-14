@@ -2478,7 +2478,10 @@ function TodoCard(props) {
 // ═══ ダッシュボード: Googleカレンダー（週/2週/月、予定の追加・削除）（2026-11-14 院長指示）═══
 var CAL_COLORS = ["#20A6A2", "#1B4F8A"];
 // 2026-11-14 院長指示: 予定は午前・午後・終日で色分け（もう1つのカレンダーの予定は左に黒い線）
-function calEvColor(x) { if (x.a) return "#C8504B"; return (x.st || "") < "12:00" ? "#20A6A2" : "#1B4F8A"; }
+function calEvColor(x) { if (x.a) return "#C8504B"; return (x.st || "") < "12:00" ? "#D5F2F0" : "#1B4F8A"; }
+// 午前は淡いティール地に濃い文字、午後は紺地に白文字、終日は赤地に白文字（明暗でも見分けられるように）
+function calEvText(x) { return !x.a && (x.st || "") < "12:00" ? "#0B5E5A" : "#fff"; }
+function calEvDot(x) { if (x.a) return "#C8504B"; return (x.st || "") < "12:00" ? "#20A6A2" : "#1B4F8A"; }
 var CAL_PROCS = ["妊鑑", "種付", "ワクチン", "削蹄", "往診", "採血", "健診", "レポジトリ", "内視鏡", "レントゲン", "休み"];
 function cpad2(n) { return (n < 10 ? "0" : "") + n; }
 function cymd(y, m, d) { return y + "-" + cpad2(m + 1) + "-" + cpad2(d); }
@@ -2648,7 +2651,7 @@ function CalendarCard(props) {
       E("button", { className: "btn btn-sm btn-secondary", onClick: function () { move(1); } }, "▶"),
       E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { setAnchor(today); setSel(today); } }, "今日"),
       E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: load }, "更新"),
-      E("div", { style: { display: "flex", gap: 8, fontSize: 11, color: "#6b7280", alignItems: "center" } }, [["午前", "#20A6A2"], ["午後", "#1B4F8A"], ["終日", "#C8504B"]].map(function (p) { return E("span", { key: p[0], style: { display: "inline-flex", alignItems: "center", gap: 3 } }, E("span", { style: { width: 10, height: 10, borderRadius: 2, background: p[1] } }), p[0]); })),
+      E("div", { style: { display: "flex", gap: 8, fontSize: 11, color: "#6b7280", alignItems: "center" } }, [["午前", "#D5F2F0", "#20A6A2"], ["午後", "#1B4F8A"], ["終日", "#C8504B"]].map(function (p) { return E("span", { key: p[0], style: { display: "inline-flex", alignItems: "center", gap: 3 } }, E("span", { style: { width: 10, height: 10, borderRadius: 2, background: p[1], border: "1px solid " + (p[2] || p[1]) } }), p[0]); })),
       err ? E("div", { style: { fontSize: 12, color: "#b45309" } }, err) : null),
     E("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 } },
       wk.map(function (w, i) { return E("div", { key: "w" + i, style: { textAlign: "center", fontSize: 11, fontWeight: 700, padding: "2px 0", color: i === 0 ? "#dc2626" : i === 6 ? "#2563eb" : "#6b7280" } }, w); }),
@@ -2659,7 +2662,7 @@ function CalendarCard(props) {
           style: { minHeight: cellH, padding: 3, borderRadius: 6, cursor: "pointer", background: isS ? "#e0f2f1" : isT ? "#fffbeb" : "#f9fafb", border: isS ? "2px solid #20A6A2" : isT ? "1px solid #fcd34d" : "1px solid #f3f4f6", overflow: "hidden" } },
           E("div", { style: { fontSize: 11, fontWeight: 700, color: i % 7 === 0 ? "#dc2626" : i % 7 === 6 ? "#2563eb" : "#374151" } }, Number(ds.slice(8))),
           list.slice(0, maxEv).map(function (x, j) {
-            return E("div", { key: j, title: x.t, style: { fontSize: 10, lineHeight: 1.35, color: "#fff", background: calEvColor(x), borderLeft: x.c ? "3px solid #111827" : "none", borderRadius: 3, padding: "1px 3px", marginTop: 1, whiteSpace: mode === "month" ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis", wordBreak: "break-word" } }, (x.a ? "" : x.st + " ") + x.t);
+            return E("div", { key: j, title: x.t, style: { fontSize: 10, lineHeight: 1.35, color: calEvText(x), background: calEvColor(x), border: "1px solid " + calEvDot(x), borderLeft: x.c ? "4px solid #111827" : "1px solid " + calEvDot(x), fontWeight: 600, borderRadius: 3, padding: "1px 3px", marginTop: 1, whiteSpace: mode === "month" ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis", wordBreak: "break-word" } }, (x.a ? "" : x.st + " ") + x.t);
           }),
           list.length > maxEv ? E("div", { style: { fontSize: 10, color: "#6b7280", paddingLeft: 2 } }, "他" + (list.length - maxEv) + "件") : null);
       })),
@@ -2673,7 +2676,7 @@ function CalendarCard(props) {
       evOf(sel).length === 0 ? E("div", { style: { fontSize: 12, color: "#9ca3af", marginBottom: 6 } }, "予定はありません")
         : E("div", { style: { marginBottom: 6 } }, evOf(sel).map(function (x, j) {
             return E("div", { key: j, style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f9fafb" } },
-              E("span", { style: { width: 8, height: 8, borderRadius: 4, background: calEvColor(x), flexShrink: 0 } }),
+              E("span", { style: { width: 8, height: 8, borderRadius: 4, background: calEvDot(x), flexShrink: 0 } }),
               E("span", { style: { fontSize: 12, color: "#6b7280", width: 86, flexShrink: 0 } }, x.a ? "終日" : x.st + "–" + x.et),
               E("span", { style: { fontSize: 13, flex: 1, minWidth: 0, wordBreak: "break-word" } }, x.t, x.l ? E("span", { style: { fontSize: 11, color: "#6b7280" } }, "　📍" + x.l) : null),
               E("button", { onClick: function () { del(x); }, disabled: busy, title: "削除", style: { border: "none", background: "none", color: "#9ca3af", fontSize: 16, cursor: "pointer", padding: "0 4px", flexShrink: 0 } }, "×"));
