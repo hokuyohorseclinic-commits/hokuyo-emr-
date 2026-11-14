@@ -11956,6 +11956,103 @@ function printCastrationCert(d) {
   w.document.close();
 }
 
+// ═══ 2026-11-14 院長指示: 保険アプリ（racehorse-insurance）で保存した診断書を、レポジトリーのようにここで一覧できるようにする（読み取りのみ）═══
+var INS_FORM_LABEL = { msm: "三井住友", sj: "損保ジャパン", death: "死亡診断書" };
+var INS_FORM_COLOR = { msm: "#1d4ed8", sj: "#15803d", death: "#374151" };
+function insFee(r) { return (r.fee_items || []).reduce(function (s, x) { var m = String(x).match(/([\d,]+)\s*円/); return s + (m ? Number(m[1].replace(/,/g, "")) : 0); }, 0); }
+function insDate(r) { return r.diagIn || r.dateIn || (r.saved_at ? String(r.saved_at).slice(0, 10) : ""); }
+function InsuranceLedger() {
+  var E = React.createElement;
+  var A = React.useState(null), recs = A[0], setRecs = A[1];
+  var B = React.useState(""), err = B[0], setErr = B[1];
+  var C = React.useState(todayJST().slice(0, 4)), yr = C[0], setYr = C[1];
+  var D = React.useState(""), mo = D[0], setMo = D[1];
+  var F = React.useState(""), q = F[0], setQ = F[1];
+  var G = React.useState(""), co = G[0], setCo = G[1];
+  var H = React.useState(""), vt = H[0], setVt = H[1];
+  React.useEffect(function () {
+    var un = null;
+    try {
+      un = firebase.firestore().collection("insuranceData").doc("saved_records").onSnapshot(function (doc) {
+        setErr(""); setRecs(doc.exists ? ((doc.data() || {}).data || []) : []);
+      }, function () { setErr("保険アプリのデータを読めませんでした"); setRecs([]); });
+    } catch (x) { setErr("保険アプリのデータを読めませんでした"); setRecs([]); }
+    return function () { if (un) un(); };
+  }, []);
+  var all = (recs || []).map(function (r) { return { r: r, d: insDate(r), fee: insFee(r) }; });
+  var years = {}; all.forEach(function (x) { if (x.d) years[x.d.slice(0, 4)] = 1; }); years[todayJST().slice(0, 4)] = 1;
+  var yearList = Object.keys(years).sort().reverse();
+  var vets = {}; all.forEach(function (x) { if (x.r.vet) vets[x.r.vet] = 1; });
+  var inYear = all.filter(function (x) { return !yr || x.d.slice(0, 4) === yr; });
+  var monthsHas = {}; inYear.forEach(function (x) { monthsHas[x.d.slice(5, 7)] = 1; });
+  var ql = q.trim().toLowerCase();
+  var rows = inYear.filter(function (x) {
+    if (mo && x.d.slice(5, 7) !== mo) return false;
+    if (co && x.r.form !== co) return false;
+    if (vt && x.r.vet !== vt) return false;
+    if (ql) {
+      var hay = [x.r.horse, x.r.farm_mgr, x.r.farm_loc, x.r.agent, x.r.vet, x.r.sire, x.r.dam, x.r.microchip].filter(Boolean).join(" ").toLowerCase();
+      if (hay.indexOf(ql) < 0) return false;
+    }
+    return true;
+  }).sort(function (a, b) { return b.d.localeCompare(a.d) || String(b.r.saved_at || "").localeCompare(String(a.r.saved_at || "")); });
+  var total = rows.reduce(function (s, x) { return s + x.fee; }, 0);
+  var byCo = {}; rows.forEach(function (x) { byCo[x.r.form] = (byCo[x.r.form] || 0) + 1; });
+  var tab = function (on, label, onClick, dis) {
+    return E("button", { key: label, onClick: onClick, disabled: dis, className: "tab-btn " + (on ? "active" : ""), style: { padding: "3px 10px", fontSize: 11, opacity: dis ? 0.35 : 1 } }, label);
+  };
+  var body = [], prevYm = "";
+  rows.forEach(function (x, i) {
+    var ym = x.d.slice(0, 7);
+    if (ym !== prevYm) {
+      var grp = rows.filter(function (y) { return y.d.slice(0, 7) === ym; });
+      var gsum = grp.reduce(function (s, y) { return s + y.fee; }, 0);
+      body.push(E("tr", { key: "h" + ym }, E("td", { colSpan: 9, style: { background: "#eef2ff", fontWeight: 700, fontSize: 12, color: "#1B4F8A", padding: "6px 10px" } },
+        ym ? (Number(ym.slice(0, 4)) + "年" + Number(ym.slice(5, 7)) + "月") : "日付なし", "　", grp.length, "件　¥", gsum.toLocaleString())));
+      prevYm = ym;
+    }
+    var r = x.r, ok = !r.health || /異常なし|健康/.test(r.health);
+    body.push(E("tr", { key: i },
+      E("td", { style: { fontSize: 12, whiteSpace: "nowrap" } }, x.d ? x.d.slice(5).replace("-", "/") : "—"),
+      E("td", null, E("span", { style: { fontSize: 10, fontWeight: 700, color: "#fff", background: INS_FORM_COLOR[r.form] || "#6b7280", borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" } }, INS_FORM_LABEL[r.form] || r.form || "—")),
+      E("td", { style: { fontWeight: 700 } }, r.horse || "—"),
+      E("td", { style: { fontSize: 12, whiteSpace: "nowrap" } }, [r.sex, r.age].filter(Boolean).join(" ")),
+      E("td", { style: { fontSize: 12 } }, r.farm_mgr || "—", r.farm_loc ? E("div", { style: { fontSize: 10, color: "#9ca3af" } }, r.farm_loc) : null),
+      E("td", { style: { fontSize: 12 } }, r.agent || "—"),
+      E("td", { style: { fontSize: 12, whiteSpace: "nowrap" } }, r.vet || "—"),
+      E("td", { style: { fontSize: 12, color: ok ? "#15803d" : "#b45309", fontWeight: ok ? 400 : 700 } }, r.health || "—", r.health_detail ? E("div", { style: { fontSize: 10, color: "#6b7280", fontWeight: 400 } }, r.health_detail) : null),
+      E("td", { style: { textAlign: "right", fontSize: 12, whiteSpace: "nowrap" }, title: (r.fee_items || []).join("\n") }, x.fee ? "¥" + x.fee.toLocaleString() : "—")));
+  });
+  return E("div", { style: { marginBottom: 24 } },
+    E("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" } },
+      E("h2", { style: { fontSize: 16, fontWeight: 700 } }, "保険診断書（保険アプリで保存した分）"),
+      E("span", { style: { fontSize: 12, color: "#6b7280" } }, recs ? ("全" + recs.length + "件") : "読み込み中…"),
+      E("button", { className: "btn btn-secondary btn-sm", style: { marginLeft: "auto", fontSize: 12 }, onClick: function () { window.open("https://hokuyohorseclinic-commits.github.io/racehorse-insurance/", "_blank"); } }, "保険アプリを開く ↗")),
+    E("p", { style: { fontSize: 12, color: "#6b7280", marginBottom: 8 } }, "保険アプリで「保存」した診断書がここに自動で並びます（見るだけ。修正・印刷は保険アプリで）。"),
+    err ? E("div", { style: { fontSize: 12, color: "#b45309", marginBottom: 8 } }, err) : null,
+    E("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 } },
+      E("span", { style: { fontSize: 12, color: "#6b7280", fontWeight: 600 } }, "年・月:"),
+      yearList.map(function (y) { return tab(yr === y, y + "年", function () { setYr(y); setMo(""); }); }),
+      tab(yr === "", "全期間", function () { setYr(""); setMo(""); }),
+      yr ? E("span", { style: { width: 1, height: 18, background: "#d1d5db", margin: "0 4px" } }) : null,
+      yr ? tab(mo === "", "全月", function () { setMo(""); }) : null,
+      yr ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (n) { var m = (n < 10 ? "0" : "") + n; return tab(mo === m, n + "月", function () { setMo(mo === m ? "" : m); }, !monthsHas[m]); }) : null),
+    E("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 } },
+      E("span", { style: { fontSize: 12, color: "#6b7280", fontWeight: 600 } }, "保険:"),
+      tab(co === "", "全て", function () { setCo(""); }),
+      ["msm", "sj", "death"].map(function (k) { return tab(co === k, INS_FORM_LABEL[k], function () { setCo(co === k ? "" : k); }); }),
+      E("span", { style: { fontSize: 12, color: "#6b7280", fontWeight: 600, marginLeft: 8 } }, "診断医:"),
+      tab(vt === "", "全て", function () { setVt(""); }),
+      Object.keys(vets).map(function (v) { return tab(vt === v, v, function () { setVt(vt === v ? "" : v); }); }),
+      E("input", { className: "inp-sm", value: q, placeholder: "馬名・牧場・代理店で検索", onChange: function (ev) { setQ(ev.target.value); }, style: { width: 200, marginLeft: "auto" } })),
+    E("div", { style: { fontSize: 13, marginBottom: 6 } }, E("b", null, rows.length, "件"), "　請求額 ", E("b", null, "¥", total.toLocaleString()),
+      E("span", { style: { fontSize: 12, color: "#6b7280" } }, "　（", Object.keys(byCo).map(function (k) { return (INS_FORM_LABEL[k] || k) + " " + byCo[k]; }).join("・") || "—", "）")),
+    E("div", { className: "card", style: { overflow: "auto", maxHeight: "60vh" } },
+      E("table", null,
+        E("thead", null, E("tr", { style: { background: "#f9fafb" } },
+          ["診断日", "保険", "馬名", "性・年齢", "牧場（管理者）", "代理店", "診断医", "結果", "請求額"].map(function (t, i) { return E("th", { key: i, style: i === 8 ? { textAlign: "right" } : null }, t); }))),
+        E("tbody", null, rows.length ? body : E("tr", null, E("td", { colSpan: 9, style: { textAlign: "center", color: "#9ca3af", padding: 20 } }, recs ? "該当する診断書はありません" : "読み込み中…"))))));
+}
 function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, currentVet, onToggleReportDone, onToggleCertDone, insuranceList, onUpdateInsuranceList }) {
   const [certMode, setCertMode] = useState(null);
   const [certHorse, setCertHorse] = useState("");
@@ -12141,6 +12238,7 @@ function DocumentsPage({ cases, horses, farms, drugsMaster, treatmentsMasters, c
     ),
 
     // === 保険診断書リスト ===
+    docTab === "ins" && React.createElement(InsuranceLedger, null),
     docTab === "ins" && React.createElement("div", {style:{marginBottom:24}},
       React.createElement("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
         React.createElement("div", null,
