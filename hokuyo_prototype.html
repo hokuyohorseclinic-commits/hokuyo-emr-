@@ -2710,9 +2710,10 @@ function CalendarCard(props) {
 // 2026-11-14 院長指示: 一覧の牧場名を押すとその牧場だけに絞り込む（もう一度押すと解除）、馬名を押すとカルテが開く
 function listFarmCell(name, cur, setCur, style) {
   var on = !!name && cur === name;
-  return React.createElement("td", { style: Object.assign({ color: "#2563eb" }, style || {}) },
-    name ? React.createElement("span", { title: on ? "絞り込みを解除" : "この牧場だけ表示", onClick: function (e) { e.stopPropagation(); setCur(on ? "" : name); },
-      style: { cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: on ? 700 : "inherit", background: on ? "#dbeafe" : "transparent", borderRadius: 4, padding: on ? "1px 5px" : 0 } }, name) : "\u2014");
+  return React.createElement("td", { title: name ? (on ? "絞り込みを解除" : "この牧場だけ表示") : "", onClick: name ? function (e) { e.stopPropagation(); setCur(on ? "" : name); } : undefined,
+      style: Object.assign({ color: "#2563eb", cursor: name ? "pointer" : "default" }, style || {}) },
+    name ? React.createElement("span", {
+      style: { textDecoration: "underline", textUnderlineOffset: 2, fontWeight: on ? 700 : "inherit", background: on ? "#dbeafe" : "transparent", borderRadius: 4, padding: on ? "1px 5px" : 0 } }, name) : "\u2014");
 }
 function listHorseName(name, onOpen) {
   if (!name) return name;
