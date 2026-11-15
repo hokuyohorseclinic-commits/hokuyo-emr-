@@ -3852,7 +3852,7 @@ function Sidebar({
       cursor: "pointer",
       width: "100%"
     }
-  }, "\u{1F5C4}\uFE0F FM\u30AB\u30EB\u30C6\u53D6\u8FBC\uFF08\uFF5E10/31\uFF09"), /*#__PURE__*/React.createElement("button", {
+  }, "\u{1F5C4}\uFE0F FM\u30AB\u30EB\u30C6\u53D6\u8FBC\uFF08\uFF5E10/31\uFF09"), React.createElement("details", { style: { width: "100%" } }, React.createElement("summary", { style: { fontSize: 10, color: "#9ca3af", cursor: "pointer", padding: "2px 4px" } }, "⚠ 管理者用（データ初期化）"), /*#__PURE__*/React.createElement("button", {
     onClick: onResetData,
     style: {
       padding: "6px 8px",
@@ -3865,7 +3865,7 @@ function Sidebar({
       cursor: "pointer",
       width: "100%"
     }
-  }, "\uD83D\uDDD1 \u30C7\u30FC\u30BF\u30EA\u30BB\u30C3\u30C8"), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDDD1 \u30C7\u30FC\u30BF\u30EA\u30BB\u30C3\u30C8")), /*#__PURE__*/React.createElement("button", {
     onClick: onLoadBackups,
     style: {
       padding: "6px 8px",
@@ -13403,14 +13403,15 @@ function App() {
   const [gFilterYear, setGFilterYear] = useState(() => todayJST().slice(0, 4));   // 一般診療一覧は年→月で選ぶ（2026-11-14）
   const [gFilterMonth, setGFilterMonth] = useState(() => todayJST().slice(0, 7));   // 2026-11-14 院長指示: 一覧は今月から開く
   const [gFilterVet, setGFilterVet] = useState("");
+  const [gFilterDx, setGFilterDx] = useState("");   // 2026-11-15 病名で絞り込み
   // 2026-11-15 院長指示: 絞り込みは「1つ前に戻る」ができるように履歴を持つ。リセットは全期間ではなく今月に戻す
-  const gSnap = JSON.stringify([gFilterFarm, gFilterStatus, gFilterBilling, gFilterYear, gFilterMonth, gFilterVet]);
+  const gSnap = JSON.stringify([gFilterFarm, gFilterStatus, gFilterBilling, gFilterYear, gFilterMonth, gFilterVet, gFilterDx]);
   const gHist = React.useRef([]); const gPrevSnap = React.useRef(null); const gRestoring = React.useRef(false); const [gHistN, setGHistN] = useState(0);
   React.useEffect(() => {
     if (gPrevSnap.current !== null && !gRestoring.current && gPrevSnap.current !== gSnap) { gHist.current.push(gPrevSnap.current); if (gHist.current.length > 30) gHist.current.shift(); }
     gRestoring.current = false; gPrevSnap.current = gSnap; setGHistN(gHist.current.length);
   }, [gSnap]);
-  const gApply = a => { setGFilterFarm(a[0]); setGFilterStatus(a[1]); setGFilterBilling(a[2]); setGFilterYear(a[3]); setGFilterMonth(a[4]); setGFilterVet(a[5]); };
+  const gApply = a => { setGFilterFarm(a[0]); setGFilterStatus(a[1]); setGFilterBilling(a[2]); setGFilterYear(a[3]); setGFilterMonth(a[4]); setGFilterVet(a[5]); setGFilterDx(a[6] || ""); };
   const gBack = () => { const p = gHist.current.pop(); if (!p) return; gRestoring.current = true; setGHistN(gHist.current.length); gApply(JSON.parse(p)); };
   const gThisMonth = () => { setGFilterYear(todayJST().slice(0, 4)); setGFilterMonth(todayJST().slice(0, 7)); };
   const gLastMonth = () => { const d = new Date(todayJST() + "T00:00:00"); d.setDate(1); d.setMonth(d.getMonth() - 1); const m = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); setGFilterYear(m.slice(0, 4)); setGFilterMonth(m); };
@@ -13532,7 +13533,8 @@ function App() {
 
   // Reset data function
   const resetAllData = () => {
-    if (!confirm("すべてのデータをリセットしますか？\nこの操作は取り消せません。")) return;
+    // 2026-11-15: 押し間違い防止（文字入力しないと実行しない）
+    if (prompt("すべてのデータ（カルテ・馬・牧場など）を消します。元に戻せません。\n本当に消す場合だけ「全データ削除」と入力してください。") !== "全データ削除") return;
     localStorage.removeItem("hokuyo_clinic_data");
     clearLocalSyncState();
     // Firebaseのデータもリセット
@@ -14504,6 +14506,7 @@ function App() {
       if (gFilterYear && !(e.mm || "").startsWith(gFilterYear)) return false;
       if (gFilterMonth && e.mm !== gFilterMonth) return false;
       if (gFilterVet && (e.c.vet || "佐藤") !== gFilterVet) return false;
+      if (gFilterDx && (e.c.diagnosis || "") !== gFilterDx) return false;
       return true;
     });
     const sorted = [...filtered].sort((a, b) => {
@@ -14541,6 +14544,40 @@ function App() {
       }
       return gDir === "desc" ? -v : v;
     });
+    // ═══ 2026-11-15 院長指示: 繁殖一覧のように、絞り込み・並べ替えのときに頭数がひと目で分かる明るいサマリー＋グループ見出し ═══
+    const gKeyFn = gSort === "farm" ? (e => e.f?.name || "（牧場なし）") : gSort === "diagnosis" ? (e => e.c.diagnosis || "（病名なし）") : gSort === "status" ? (e => e.c.caseStatus || "継続中") : gSort === "billing" ? (e => e.bc || "") : null;
+    const gGroups = {};
+    if (gKeyFn) sorted.forEach(e => { const k = gKeyFn(e); const g = gGroups[k] || (gGroups[k] = { n: 0, horses: new Set(), amt: 0 }); g.n++; g.horses.add(e.c.horseId); g.amt += e.t || 0; });
+    const gGroupHead = i => {
+      if (!gKeyFn) return null; const k = gKeyFn(sorted[i]); if (i > 0 && gKeyFn(sorted[i - 1]) === k) return null; const g = gGroups[k];
+      return React.createElement("tr", { key: "gh" + i }, React.createElement("td", { colSpan: 10, style: { background: "#eef4fb", color: "#1B4F8A", fontWeight: 700, fontSize: 13, padding: "7px 12px", borderTop: "2px solid #bfdbfe" } },
+        "▸ " + k, React.createElement("span", { style: { marginLeft: 12, fontSize: 12, fontWeight: 600, color: "#1d4ed8" } }, g.horses.size + "頭"), React.createElement("span", { style: { marginLeft: 8, fontSize: 11, color: "#6b7280", fontWeight: 400 } }, g.n + "カルテ　¥" + g.amt.toLocaleString())));
+    };
+    const gSummaryBar = () => {
+      const horsesN = new Set(filtered.map(e => e.c.horseId)).size;
+      const amt = filtered.reduce((a, e) => a + (e.t || 0), 0);
+      const cnt = (fn) => { const m = {}; filtered.forEach(e => { const k = fn(e); if (k) m[k] = (m[k] || 0) + 1; }); return Object.keys(m).map(k => [k, m[k]]).sort((a, b) => b[1] - a[1]); };
+      const st = cnt(e => e.c.caseStatus || "継続中"), vt = cnt(e => e.c.vet || "佐藤"), dx = cnt(e => e.c.diagnosis || ""), fm = cnt(e => e.f?.name || "");
+      const per = gFilterMonth ? (Number(gFilterMonth.slice(0, 4)) + "年" + Number(gFilterMonth.slice(5, 7)) + "月") : gFilterYear ? gFilterYear + "年" : "全期間";
+      const label = [per, gFilterFarm, gFilterDx, gFilterStatus, gFilterVet && (gFilterVet + "先生"), gFilterBilling].filter(Boolean).join(" ／ ");
+      const chip = (text, bg, c, on, onClick, key) => React.createElement("span", { key: key || text, onClick: onClick, title: onClick ? (on ? "絞り込みを解除" : "これで絞り込む") : "", style: { background: bg, color: c, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", cursor: onClick ? "pointer" : "default", border: on ? "2px solid " + c : "2px solid transparent" } }, text);
+      const sep = k => React.createElement("span", { key: k, style: { width: 1, height: 22, background: "#bfdbfe" } });
+      const stC = { "継続中": ["#dbeafe", "#1d4ed8"], "診療終了": ["#dcfce7", "#15803d"] };
+      return React.createElement("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "10px 16px", marginBottom: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10 } },
+        React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "#1e3a8a" } }, label),
+        React.createElement("span", { style: { fontSize: 26, fontWeight: 800, color: "#1d4ed8", lineHeight: 1 } }, horsesN, React.createElement("span", { style: { fontSize: 13, fontWeight: 600, marginLeft: 2 } }, "頭")),
+        React.createElement("span", { style: { fontSize: 12, color: "#374151" } }, filtered.length + "カルテ　累計 ¥" + amt.toLocaleString()),
+        sep("s1"),
+        st.map(([k, n]) => chip(k + " " + n, (stC[k] || ["#f3f4f6", "#374151"])[0], (stC[k] || ["#f3f4f6", "#374151"])[1], gFilterStatus === k, () => setGFilterStatus(gFilterStatus === k ? "" : k), "st" + k)),
+        vt.length > 1 || gFilterVet ? sep("s2") : null,
+        vt.length > 1 || gFilterVet ? vt.map(([k, n]) => chip(k + " " + n, k === "佐藤" ? "#dbeafe" : "#dcfce7", k === "佐藤" ? "#1e40af" : "#166534", gFilterVet === k, () => setGFilterVet(gFilterVet === k ? "" : k), "vt" + k)) : null,
+        dx.length ? sep("s3") : null,
+        dx.length ? React.createElement("span", { key: "dxl", style: { fontSize: 11, color: "#6b7280" } }, "病名") : null,
+        dx.slice(0, 8).map(([k, n]) => chip(k + " " + n, "#fef3c7", "#92400e", gFilterDx === k, () => setGFilterDx(gFilterDx === k ? "" : k), "dx" + k)),
+        !gFilterFarm && fm.length > 1 ? sep("s4") : null,
+        !gFilterFarm && fm.length > 1 ? React.createElement("span", { key: "fml", style: { fontSize: 11, color: "#6b7280" } }, "牧場") : null,
+        !gFilterFarm && fm.length > 1 ? fm.slice(0, 6).map(([k, n]) => chip(k + " " + n, "#f3e8ff", "#6b21a8", false, () => setGFilterFarm(k), "fm" + k)) : null);
+    };
     return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
@@ -14708,12 +14745,13 @@ function App() {
         /*#__PURE__*/React.createElement("button", {onClick:()=>setGFilterVet(""),className:`tab-btn ${gFilterVet===""?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, "全て"),
         vets.map(v => /*#__PURE__*/React.createElement("button", {key:v,onClick:()=>setGFilterVet(gFilterVet===v?"":v),className:`tab-btn ${gFilterVet===v?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, v)))),
     gHistN > 0 && React.createElement("button", { onClick: gBack, className: "btn btn-sm btn-secondary", style: { fontSize: 11, padding: "3px 10px" }, title: "1つ前の絞り込みに戻す" }, "↩ 1つ前に戻る"),
-    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterVet || gFilterYear !== todayJST().slice(0, 4) || gFilterMonth !== todayJST().slice(0, 7)) && /*#__PURE__*/React.createElement("button", {
+    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterVet || gFilterDx || gFilterYear !== todayJST().slice(0, 4) || gFilterMonth !== todayJST().slice(0, 7)) && /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         setGFilterFarm("");
         setGFilterStatus("");
         setGFilterBilling("");
         setGFilterVet("");
+        setGFilterDx("");
         gThisMonth();
       },
       title: "絞り込みを外して今月の一覧に戻す",
@@ -14724,14 +14762,14 @@ function App() {
         border: "none",
         cursor: "pointer"
       }
-    }, "× リセット（今月に戻す）")), listFarmBanner(gFilterFarm, () => setGFilterFarm("")), /*#__PURE__*/React.createElement("div", {
+    }, "× リセット（今月に戻す）")), listFarmBanner(gFilterFarm, () => setGFilterFarm("")), gFilterDx ? listFarmBanner("病名「" + gFilterDx + "」", () => setGFilterDx("")) : null, gSummaryBar(), /*#__PURE__*/React.createElement("div", {
       className: "card",
       style: {
         overflow: "auto"
       }
     }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
       style: {
-        background: "#f9fafb"
+        background: "#eef4fb", color: "#1B4F8A"
       }
     }, /*#__PURE__*/React.createElement("th", {
       style: {
@@ -14786,14 +14824,14 @@ function App() {
       t,
       bc,
       lastVisit
-    }) => {
+    }, __i) => {
       const isActive = c.caseStatus === "継続中";
       const isEnded = c.caseStatus === "診療終了";
-      const rowBg = isActive ? "#eff6ff" : isEnded ? "#f9fafb" : "#f0fdf4";
-      const rowBorder = isActive ? "3px solid #3b82f6" : isEnded ? "3px solid #9ca3af" : "2px solid #86efac";
-      const rowOpacity = isEnded ? 0.6 : 1;
+      const rowBg = isActive ? "#f0f7ff" : isEnded ? "#ffffff" : "#f0fdf4";   // 2026-11-15 明るく（終了カルテを暗くしない）
+      const rowBorder = isActive ? "3px solid #3b82f6" : isEnded ? "3px solid #86efac" : "2px solid #86efac";
+      const rowOpacity = 1;
       const vc = c.visits?.length || 0;
-      return /*#__PURE__*/React.createElement("tr", {
+      return React.createElement(React.Fragment, { key: c.id }, gGroupHead(__i), /*#__PURE__*/React.createElement("tr", {
       key: c.id,
       onClick: () => openCase(c),
       style: {
@@ -14820,11 +14858,7 @@ function App() {
       style: {
         fontWeight: 600
       }
-    }, listHorseName(h?.name, () => openCase(c))), listFarmCell(f?.name, gFilterFarm, setGFilterFarm), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 600
-      }
-    }, c.diagnosis || "\u2014"), /*#__PURE__*/React.createElement("td", null, vc > 1 ? /*#__PURE__*/React.createElement("span", {
+    }, listHorseName(h?.name, () => openCase(c))), listFarmCell(f?.name, gFilterFarm, setGFilterFarm), c.diagnosis ? listFarmCell(c.diagnosis, gFilterDx, setGFilterDx, { fontWeight: 600, color: "#92400e" }) : React.createElement("td", null, "\u2014"), /*#__PURE__*/React.createElement("td", null, vc > 1 ? /*#__PURE__*/React.createElement("span", {
       style: {
         color: "#b45309",
         fontWeight: 600
@@ -14875,7 +14909,7 @@ function App() {
         color: "#dc2626",
         cursor: "pointer"
       }
-    }, "\u524A\u9664")));
+    }, "\u524A\u9664"))));
     })))));
   }
   const [pFilterFarm, setPFilterFarm] = useState("");
