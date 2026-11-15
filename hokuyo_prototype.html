@@ -2740,12 +2740,122 @@ function listHorseName(name, onOpen) {
   return React.createElement("span", { title: "カルテを開く", onClick: function (e) { e.stopPropagation(); onOpen(); },
     style: { cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 } }, name);
 }
+// ═══ 2026-11-15 院長指示: ToDoと引き継ぎを1つのカードにまとめる。継続中カルテ（直近2週間 or 次回予定あり）を自動で並べ、
+//     手入力の申し送り（宛先・期日・馬）も同じカードに。毎日診ない継続もあるので「間隔」ではなく「次回予定日」で超過を判定 ═══
+function hoDays(a, b) { if (!a || !b) return null; return Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000); }
+function hoMD(s) { return s ? Number(s.slice(5, 7)) + "/" + Number(s.slice(8, 10)) : ""; }
+function HandoverTodoCard(props) {
+  var E = React.createElement;
+  var todos = Array.isArray(props.todos) ? props.todos : [];
+  var upd = props.onUpdate || function () {};
+  var cases = props.cases || [], horses = props.horses || [], farms = props.farms || [];
+  var me = props.currentVet || "佐藤";
+  var today = todayJST();
+  var tx = React.useState(""), text = tx[0], setText = tx[1];
+  var tt = React.useState("全員"), to = tt[0], setTo = tt[1];
+  var td = React.useState(""), due = td[0], setDue = td[1];
+  var th = React.useState(""), hq = th[0], setHq = th[1];
+  var sd = React.useState(false), showDone = sd[0], setShowDone = sd[1];
+  var mf = React.useState(false), mineOnly = mf[0], setMineOnly = mf[1];
+  var hById = {}; horses.forEach(function (h) { hById[h.id] = h; });
+  var fName = function (id) { var f = farms.find(function (x) { return x.id === Number(id); }); return f ? f.name : ""; };
+  var lastOf = function (c) { return (c.visits || []).reduce(function (mx, v) { return (v.date || "") > mx ? v.date : mx; }, c.openDate || ""); };
+  // ── 自動: 継続中の一般カルテ（最終診療が14日以内、または次回予定日が入っているもの）
+  var auto = cases.filter(function (c) {
+    if (c.type !== "一般" || c.archived || c.caseStatus !== "継続中") return false;
+    var d = hoDays(lastOf(c), today);
+    return !!c.nextDate || (d != null && d <= 14);
+  }).map(function (c) { return { c: c, h: hById[c.horseId], last: lastOf(c) }; })
+    .filter(function (x) { return !mineOnly || !x.c.vet || x.c.vet === me || (x.c.handoverTo && x.c.handoverTo === me); })
+    .sort(function (a, b) {
+      var an = a.c.nextDate || "9999", bn = b.c.nextDate || "9999";
+      return an.localeCompare(bn) || b.last.localeCompare(a.last);
+    });
+  var add = function () {
+    var v = text.trim(); if (!v) return;
+    var nm = hq.split("（")[0].trim(); var h = nm ? horses.find(function (x) { return x.name === nm; }) : null;
+    upd(todos.concat([{ id: Date.now() + "-" + Math.floor(Math.random() * 1000), text: v, done: false, createdAt: new Date().toISOString(), by: me, to: to, due: due, horseId: h ? h.id : null, horse: h ? h.name : (nm || "") }]));
+    setText(""); setDue(""); setHq("");
+  };
+  var toggle = function (id) { upd(todos.map(function (t) { return t.id === id ? Object.assign({}, t, { done: !t.done, doneAt: !t.done ? new Date().toISOString() : "" }) : t; })); };
+  var del = function (id) { upd(todos.filter(function (t) { return t.id !== id; })); };
+  var visible = todos.filter(function (t) { return !mineOnly || !t.to || t.to === "全員" || t.to === me; });
+  var open = visible.filter(function (t) { return !t.done; }).sort(function (a, b) { return (a.due || "9999").localeCompare(b.due || "9999") || (a.createdAt || "").localeCompare(b.createdAt || ""); });
+  var done = visible.filter(function (t) { return t.done; }).sort(function (a, b) { return (b.doneAt || "").localeCompare(a.doneAt || ""); });
+  var openHorse = function (horseId) {
+    var cs = cases.filter(function (c) { return String(c.horseId) === String(horseId) && !c.archived; }).sort(function (a, b) { return lastOf(b).localeCompare(lastOf(a)); });
+    if (cs[0] && props.onOpenCase) props.onOpenCase(cs[0]);
+  };
+  var dueBadge = function (d) {
+    if (!d) return null; var n = hoDays(today, d);
+    var st = n < 0 ? { bg: "#fee2e2", c: "#b91c1c", t: hoMD(d) + " 超過" } : n === 0 ? { bg: "#ffedd5", c: "#c2410c", t: "今日" } : n === 1 ? { bg: "#fef3c7", c: "#92400e", t: "明日" } : { bg: "#f3f4f6", c: "#374151", t: hoMD(d) };
+    return E("span", { style: { fontSize: 10, fontWeight: 700, background: st.bg, color: st.c, borderRadius: 8, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0 } }, st.t);
+  };
+  var toBadge = function (t) {
+    if (!t || t === "全員") return null;
+    return E("span", { style: { fontSize: 10, fontWeight: 700, color: "#fff", background: t === "佐藤" ? "#1d4ed8" : "#15803d", borderRadius: 8, padding: "1px 6px", flexShrink: 0 } }, "→" + t);
+  };
+  var row = function (t) {
+    return E("div", { key: t.id, style: { display: "flex", alignItems: "center", gap: 6, padding: "5px 2px", borderBottom: "1px solid #f3f4f6" } },
+      E("input", { type: "checkbox", checked: !!t.done, onChange: function () { toggle(t.id); }, style: { width: 18, height: 18, flexShrink: 0, cursor: "pointer" } }),
+      t.done ? null : dueBadge(t.due), toBadge(t.to),
+      t.horse ? E("span", { onClick: function () { if (t.horseId) openHorse(t.horseId); }, title: t.horseId ? "カルテを開く" : "", style: { fontSize: 12, fontWeight: 700, color: t.horseId ? "#1B4F8A" : "#374151", textDecoration: t.horseId ? "underline" : "none", cursor: t.horseId ? "pointer" : "default", flexShrink: 0 } }, t.horse) : null,
+      E("div", { style: { flex: 1, fontSize: 13, minWidth: 0, wordBreak: "break-word", color: t.done ? "#9ca3af" : "#111827", textDecoration: t.done ? "line-through" : "none" } }, t.text),
+      t.by ? E("span", { style: { fontSize: 10, color: "#9ca3af", flexShrink: 0 } }, t.by) : null,
+      E("button", { onClick: function () { del(t.id); }, title: "削除", style: { border: "none", background: "none", color: "#9ca3af", fontSize: 16, cursor: "pointer", padding: "0 4px", flexShrink: 0 } }, "×"));
+  };
+  var autoRow = function (x) {
+    var c = x.c, h = x.h, ago = hoDays(x.last, today);
+    var f = fName(c.farmId || (h && h.farmId));
+    return E("div", { key: c.id, style: { padding: "6px 2px", borderBottom: "1px solid #f3f4f6" } },
+      E("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+        dueBadge(c.nextDate),
+        E("span", { onClick: function () { if (props.onOpenCase) props.onOpenCase(c); }, style: { fontSize: 13, fontWeight: 700, color: "#1B4F8A", textDecoration: "underline", cursor: "pointer" } }, h ? h.name : "(馬不明)"),
+        E("span", { style: { fontSize: 11, color: "#6b7280" } }, f),
+        E("span", { style: { fontSize: 12 } }, c.diagnosis || "病名なし"),
+        E("span", { style: { fontSize: 11, color: "#6b7280" } }, "前回 " + hoMD(x.last) + (ago != null ? "（" + (ago === 0 ? "今日" : ago + "日前") + "）" : "") + "・" + (c.visits || []).length + "回"),
+        c.vet ? E("span", { style: { fontSize: 10, color: "#fff", background: c.vet === "佐藤" ? "#1d4ed8" : "#15803d", borderRadius: 8, padding: "1px 6px" } }, c.vet) : null,
+        E("span", { style: { marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" } },
+          E("input", { type: "date", value: c.nextDate || "", title: "次回予定日", onChange: function (e) { props.onPatchCase && props.onPatchCase(c, { nextDate: e.target.value }); }, style: { fontSize: 11, padding: "1px 4px", border: "1px solid #d1d5db", borderRadius: 4, width: 118 } }),
+          E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11, padding: "2px 8px" }, onClick: function () { if (props.onCloseCase && confirm((h ? h.name : "") + " の「" + (c.diagnosis || "") + "」を診療終了にしますか？")) props.onCloseCase(c); } }, "終了"))),
+      E("input", { key: c.id + (c.handover || ""), defaultValue: c.handover || "", placeholder: "申し送り（例: 明日抜糸・包帯交換は隔日）", onBlur: function (e) { var v = e.target.value.trim(); if (v !== (c.handover || "") && props.onPatchCase) props.onPatchCase(c, { handover: v }); },
+        onKeyDown: function (e) { if (e.key === "Enter" && !e.nativeEvent.isComposing) e.target.blur(); },
+        style: { width: "100%", marginTop: 3, fontSize: 12, padding: "3px 6px", border: "1px dashed " + (c.handover ? "#f59e0b" : "#e5e7eb"), background: c.handover ? "#fffbeb" : "#fff", borderRadius: 4 } }));
+  };
+  var horseList = React.useMemo(function () { return horses.slice(0, 3000).map(function (h) { return h.name + (h.farmId ? "（" + fName(h.farmId) + "）" : ""); }); }, [horses, farms]);
+  var over = auto.filter(function (x) { return x.c.nextDate && x.c.nextDate < today; }).length + open.filter(function (t) { return t.due && t.due < today; }).length;
+  var sec = function (label, n, color) { return E("div", { style: { fontSize: 12, fontWeight: 700, color: color, margin: "8px 0 2px", display: "flex", alignItems: "center", gap: 6 } }, label, E("span", { style: { fontSize: 10, background: "#f3f4f6", color: "#374151", borderRadius: 8, padding: "1px 7px" } }, n + "件")); };
+  return E("div", { className: "card", style: { padding: 14, flex: "2 1 520px", minWidth: 0 } },
+    E("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } },
+      E("div", { style: { fontWeight: 700, fontSize: 14, color: "#1B4F8A" } }, "✅ ToDo・引き継ぎ"),
+      over ? E("span", { style: { fontSize: 11, fontWeight: 700, color: "#b91c1c", background: "#fee2e2", borderRadius: 10, padding: "2px 8px" } }, "期日超過 " + over + "件") : null,
+      E("label", { style: { marginLeft: "auto", fontSize: 11, color: "#374151", cursor: "pointer" } }, E("input", { type: "checkbox", checked: mineOnly, onChange: function (e) { setMineOnly(e.target.checked); }, style: { marginRight: 4, verticalAlign: "middle" } }), me + "先生の分だけ"),
+      done.length ? E("button", { className: "btn btn-sm btn-secondary", onClick: function () { setShowDone(!showDone); }, style: { fontSize: 11 } }, showDone ? "完了を隠す" : "完了 " + done.length + "件") : null),
+    E("div", { style: { display: "flex", gap: 6, marginBottom: 4, flexWrap: "wrap" } },
+      E("input", { className: "inp-sm", value: text, placeholder: "やること・申し送りを入力してEnter", onChange: function (e) { setText(e.target.value); },
+        onKeyDown: function (e) { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); add(); } }, style: { flex: "1 1 220px", fontSize: 13, padding: "6px 8px", minHeight: 36, minWidth: 0 } }),
+      E("button", { className: "btn btn-sm btn-primary", onClick: add }, "追加")),
+    E("div", { style: { display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: "#6b7280" } },
+      "宛先", ["全員", "佐藤", "關"].map(function (v) { return E("button", { key: v, onClick: function () { setTo(v); }, style: { fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: to === v ? "#1B4F8A" : "#fff", color: to === v ? "#fff" : "#374151", cursor: "pointer" } }, v); }),
+      E("span", { style: { marginLeft: 6 } }, "期日"), E("input", { type: "date", value: due, onChange: function (e) { setDue(e.target.value); }, style: { fontSize: 11, padding: "1px 4px", border: "1px solid #d1d5db", borderRadius: 4 } }),
+      [["今日", 0], ["明日", 1]].map(function (p) { return E("button", { key: p[0], onClick: function () { var d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + p[1]); setDue(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0")); }, style: { fontSize: 11, padding: "2px 6px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" } }, p[0]); }),
+      E("span", { style: { marginLeft: 6 } }, "馬"), E("input", { list: "hoHorses", value: hq, placeholder: "（任意）", onChange: function (e) { setHq(e.target.value); }, style: { fontSize: 11, padding: "2px 6px", border: "1px solid #d1d5db", borderRadius: 4, width: 150 } }),
+      E("datalist", { id: "hoHorses" }, horseList.map(function (n, i) { return E("option", { key: i, value: n }); }))),
+    E("div", { style: { maxHeight: 420, overflowY: "auto" } },
+      sec("📝 ToDo・申し送り", open.length, "#92400e"),
+      open.length === 0 && !showDone ? E("div", { style: { fontSize: 12, color: "#9ca3af", padding: "4px 2px" } }, "ありません") : null,
+      open.map(row), showDone ? done.map(row) : null,
+      showDone && done.length ? E("div", { style: { textAlign: "right", margin: "4px 0" } }, E("button", { className: "btn btn-sm btn-secondary", style: { fontSize: 11 }, onClick: function () { upd(todos.filter(function (t) { return !t.done || visible.indexOf(t) < 0; })); setShowDone(false); } }, "完了したものを消す")) : null,
+      sec("🔄 継続診療（カルテから自動）", auto.length, "#1e40af"),
+      E("div", { style: { fontSize: 10, color: "#9ca3af", marginBottom: 2 } }, "「継続中」で最終診療が2週間以内、または次回予定日があるカルテ。次回予定日を過ぎたものは赤。"),
+      auto.length === 0 ? E("div", { style: { fontSize: 12, color: "#9ca3af", padding: "4px 2px" } }, "ありません") : auto.map(autoRow)));
+}
 function DashExtras(props) {
   return React.createElement(React.Fragment, null,
     React.createElement(CalendarCard, { cfg: props.calCfg, farmNames: props.farmNames }),
     React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-start" } },
       React.createElement(WeatherCard, null),
-      React.createElement(TodoCard, { todos: props.todos, onUpdate: props.onUpdateTodos })));
+      React.createElement(HandoverTodoCard, { todos: props.todos, onUpdate: props.onUpdateTodos, cases: props.cases, horses: props.horses, farms: props.farms, currentVet: props.currentVet, onOpenCase: props.onOpenCase, onCloseCase: props.onCloseCase, onPatchCase: props.onPatchCase })));
 }
 function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone }) {
   const E = React.createElement;
@@ -4033,6 +4143,8 @@ function GeneralKartePage({
   const filteredHorses = preFilteredFarm ? horses.filter(h => h.farmId === preFilteredFarm.id) : horses;
   const [diagnosis, setDiagnosis] = useState(kase?.diagnosis || "");
   const [caseStatus, setCaseStatus] = useState(kase?.caseStatus || "\u8A3A\u7642\u7D42\u4E86");
+  const [nextDate, setNextDate] = useState(kase?.nextDate || "");   // 2026-11-15 継続診療の次回予定日
+  const [handover, setHandover] = useState(kase?.handover || "");   // 2026-11-15 申し送り（ダッシュボードに表示）
   const pastVisits = kase?.visits || [];
   const [visitDate, setVisitDate] = useState(todayJST());
   const [visitType, setVisitType] = useState(isNew ? "\u521D\u8A3A" : "");
@@ -4139,6 +4251,8 @@ function GeneralKartePage({
       farmId: horse ? horse.farmId : null,
       diagnosis,
       caseStatus: caseStatus,
+      nextDate: caseStatus === "\u7D99\u7D9A\u4E2D" ? nextDate : "",
+      handover: caseStatus === "\u7D99\u7D9A\u4E2D" ? handover : "",
       openDate: visitDate,
       vet: visitVet || currentVet || "\u4F50\u85E4",
       visits: firstVisit
@@ -4186,6 +4300,8 @@ function GeneralKartePage({
       farmId: horse?.farmId || kase?.farmId,
       diagnosis,
       caseStatus: caseStatus,
+      nextDate: caseStatus === "\u7D99\u7D9A\u4E2D" ? nextDate : "",
+      handover: caseStatus === "\u7D99\u7D9A\u4E2D" ? handover : "",
       openDate: kase?.openDate || visitDate,
       vet: kase?.vet || currentVet || "\u4F50\u85E4",
       visits: updatedVisits
@@ -4611,7 +4727,7 @@ function GeneralKartePage({
     style: { fontSize: 13, fontWeight: 600, color: caseStatus === "\u7D99\u7D9A\u4E2D" ? "#1d4ed8" : "#6b7280" }
   }, "\u7D99\u7D9A\u3059\u308B\uFF08\u660E\u65E5\u4EE5\u964D\u3082\u8A3A\u7642\u3042\u308A\uFF09"), caseStatus === "\u7D99\u7D9A\u4E2D" && /*#__PURE__*/React.createElement("span", {
     style: { fontSize: 10, color: "#2563eb", background: "#eff6ff", padding: "2px 8px", borderRadius: 4 }
-  }, "\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9\u306B\u6B8B\u308A\u307E\u3059"))))), /*#__PURE__*/React.createElement("div", {
+  }, "\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9\u306B\u6B8B\u308A\u307E\u3059")), caseStatus === "\u7D99\u7D9A\u4E2D" && React.createElement("div", {style:{display:"flex",gap:10,marginTop:8,flexWrap:"wrap",alignItems:"center",fontSize:12,color:"#374151"}}, "次回予定日", React.createElement("input", {type:"date", value: nextDate, onChange: e => setNextDate(e.target.value), className:"inp-sm", style:{width:150}}), "申し送り", React.createElement("input", {value: handover, onChange: e => setHandover(e.target.value), placeholder:"例: 明日抜糸・包帯交換は隔日（ダッシュボードに表示）", className:"inp-sm", style:{flex:"1 1 260px",minWidth:200}}))))), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 20,
@@ -10620,6 +10736,8 @@ function DashboardPage({
   drugsMaster,
   onOpenCase,
   onCloseCase,
+  onPatchCase,
+  currentVet,
   memos,
   onUpdateMemos,
   onConfirmDraft,
@@ -10792,7 +10910,7 @@ function DashboardPage({
       fontSize: 11,
       color: "#9ca3af"
     }
-  }, s.sub)))))), /*#__PURE__*/React.createElement(DashExtras, {todos: todos, onUpdateTodos: onUpdateTodos, calCfg: calCfg, farmNames: farmNames}), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
+  }, s.sub)))))), /*#__PURE__*/React.createElement(DashExtras, {todos: todos, onUpdateTodos: onUpdateTodos, calCfg: calCfg, farmNames: farmNames, cases: cases, horses: horses, farms: farms, currentVet: currentVet, onOpenCase: onOpenCase, onCloseCase: onCloseCase, onPatchCase: onPatchCase}), /*#__PURE__*/React.createElement(MemoInbox, {memos: memos, onUpdate: onUpdateMemos, onOpenCase: onOpenCase, cases: cases, horses: horses}), checkItems.length > 0 && /*#__PURE__*/React.createElement("div", {className: "card", style: {marginBottom: 16, overflow: "hidden", border: "1px solid #fde68a"}},
     /*#__PURE__*/React.createElement("div", {style: {padding: "10px 14px", background: "#fffbeb", color: "#92400e", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer"}, onClick: () => setShowCheck(!showCheck)},
       /*#__PURE__*/React.createElement("span", null, (showCheck ? "▾" : "▸") + " ⚠ 確認が必要なカルテ"),
       /*#__PURE__*/React.createElement("span", {className: "badge badge-orange"}, checkItems.length + "件"),
@@ -13927,6 +14045,8 @@ function App() {
           drugsMaster: drugsMaster,
           onOpenCase: openCase,
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
+          onPatchCase: (c, patch) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, patch) : x)),
+          currentVet: currentVet,
           memos: memos,
           onUpdateMemos: setMemos,
           todos: todos,
@@ -14281,6 +14401,8 @@ function App() {
           drugsMaster: drugsMaster,
           onOpenCase: openCase,
           onCloseCase: (c) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, { caseStatus: "\u8A3A\u7642\u7D42\u4E86", closedAt: todayJST() }) : x)),
+          onPatchCase: (c, patch) => setCases(prev => prev.map(x => x.id === c.id ? Object.assign({}, x, patch) : x)),
+          currentVet: currentVet,
           memos: memos,
           onUpdateMemos: setMemos,
           todos: todos,
