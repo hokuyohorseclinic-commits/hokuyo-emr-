@@ -1739,6 +1739,15 @@ function invDetailRows(it, dm) {
   if (v.totalFee && Number(v.totalFee) !== sum) { if (!L.length) L.push(["診療一式", Number(v.totalFee)]); else L.push(["その他（調整）", Number(v.totalFee) - sum]); }
   return L.map(function (x) { return '<tr><td style="border-bottom:none;padding-top:1px;padding-bottom:1px;"></td><td style="border-bottom:none;padding:1px 8px 1px 26px;font-size:8.5pt;color:#444;">・' + x[0] + '</td><td class="right" style="border-bottom:none;padding-top:1px;padding-bottom:1px;font-size:8.5pt;color:#444;">（税抜 ' + Number(x[1]).toLocaleString() + '円）</td></tr>'; }).join("");
 }
+// 2026-11-15 院長指示: 一般カルテの車両距離はプルダウン（4〜10km、以降 15・20・25・30km）
+var KM_OPTS = [4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30];
+function kmSelect(val, setVal, style) {
+  var v = val === undefined || val === null ? "" : String(val);
+  var opts = KM_OPTS.slice(); if (v && opts.indexOf(Number(v)) < 0) opts.push(Number(v)); opts.sort(function (a, b) { return a - b; });
+  return React.createElement("select", { className: "inp-sm", value: v, onChange: function (e) { setVal(e.target.value); }, style: style },
+    React.createElement("option", { value: "" }, "なし"),
+    opts.map(function (n) { return React.createElement("option", { key: n, value: String(n) }, n + "km"); }));
+}
 function calcVisitTotal(v,dm){
 if(v.totalFee)return Number(v.totalFee);
 var viFee=Number(v.visitFee||0);
@@ -3052,7 +3061,7 @@ function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, o
           E("div", {style: {textAlign: "right", fontSize: 12, fontWeight: 700, marginTop: 4}}, "小計 ¥" + drugTotal.toLocaleString()))),
         card("⑤ 車両・まとめ", E("div", null,
           E("div", {style: {display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap"}},
-            E("div", null, E("label", {className: "lbl"}, "車両(km)"), E("input", {className: "inp-sm", type: "number", value: vehicleKm, onChange: e => setVehicleKm(e.target.value), style: {width: 90}})),
+            E("div", null, E("label", {className: "lbl"}, "車両(km)"), kmSelect(vehicleKm, setVehicleKm, {width: 90})),
             E("div", null, E("label", {className: "lbl"}, "車両料金の計上"), E("div", {style: {display: "flex", gap: 4}}, [["first", "1頭目だけ"], ["each", "全頭に"]].map(o => E("button", {key: o[0], onClick: () => setKmMode(o[0]), className: "tab-btn " + (kmMode === o[0] ? "active" : ""), style: {padding: "4px 10px", fontSize: 12}}, o[1])))),
             E("div", {style: {fontSize: 12, color: "#6b7280"}}, kmFee ? "¥" + kmFee.toLocaleString() + (kmMode === "each" ? " × " + selIds.length + "頭" : "") : "")),
           E("div", {style: {marginTop: 12, padding: 12, background: "#f0fdf4", borderRadius: 8, fontSize: 13, lineHeight: 1.8}},
@@ -5166,12 +5175,7 @@ function GeneralKartePage({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
-  }, "\u8ECA\u4E21(km)"), /*#__PURE__*/React.createElement("input", {
-    className: "inp-sm",
-    type: "number",
-    value: vehicleKm,
-    onChange: e => setVehicleKm(e.target.value)
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+  }, "\u8ECA\u4E21(km)"), kmSelect(vehicleKm, setVehicleKm, {})), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "lbl"
   }, "\u5F80\u8A3A\u6599"), /*#__PURE__*/React.createElement("div", {
     style: {
