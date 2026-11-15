@@ -10792,7 +10792,9 @@ function DashboardPage({
       } else if (c.type === "薬事") {
         if ((c.pharmaItems || []).length === 0) out.push({c, h, kind: "薬品なし", detail: "薬事カルテに薬品がありません（¥0）", color: "#6b7280"});
       }
-      if (!h) out.push({c, h, kind: "馬不明", detail: "馬マスターに見つかりません（請求先が決まりません）", color: "#dc2626"});
+      // 2026-11-15 院長指示: 薬事カルテは馬なし（牧場に薬を置いた扱い）が普通なので、牧場が入っていれば確認不要
+      if (!h && c.type === "薬事") { if (!c.farmId) out.push({c, h, kind: "牧場なし", detail: "薬事カルテの牧場（請求先）が未設定です", color: "#dc2626"}); }
+      else if (!h) out.push({c, h, kind: "馬不明", detail: "馬マスターに見つかりません（請求先が決まりません）", color: "#dc2626"});
       else if (!c.farmId && !h.farmId) out.push({c, h, kind: "牧場なし", detail: "馬の所属牧場が未設定（請求書に載りません）", color: "#dc2626"});
     });
     return out;
@@ -10920,7 +10922,7 @@ function DashboardPage({
       return /*#__PURE__*/React.createElement("div", {key: i, style: {padding: "6px 12px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12}, onClick: () => onOpenCase(x.c)},
         /*#__PURE__*/React.createElement("span", {className: "badge badge-" + (x.c.type === "一般" ? "blue" : x.c.type === "繁殖" ? "pink" : "orange")}, x.c.type),
         /*#__PURE__*/React.createElement("span", {style: {fontWeight: 700, minWidth: 64, color: x.color}}, x.kind),
-        /*#__PURE__*/React.createElement("span", {style: {fontWeight: 600, minWidth: 140}}, x.h ? x.h.name : "(馬ID " + x.c.horseId + ")"),
+        /*#__PURE__*/React.createElement("span", {style: {fontWeight: 600, minWidth: 140}}, x.h ? x.h.name : (x.c.type === "薬事" ? "（牧場あて）" : "(馬ID " + x.c.horseId + ")")),
         /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280", minWidth: 100}}, f ? f.name : ""),
         /*#__PURE__*/React.createElement("span", {style: {color: "#6b7280"}}, (x.c.openDate || "") + " " + (x.c.diagnosis || "")),
         /*#__PURE__*/React.createElement("span", {style: {flex: 1, color: x.color}}, x.detail),
