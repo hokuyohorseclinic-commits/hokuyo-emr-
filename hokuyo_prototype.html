@@ -2924,8 +2924,13 @@ function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone 
 }
 
 // ═══════════════ 一般カルテ 一括作成（予防接種・駆虫など同内容を複数頭に）═══════════════
-function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, onBack, onSaveMany, currentVet }) {
+function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, onBack, onSaveMany, currentVet, onAddHorse }) {
   const E = React.createElement;
+  // 2026-11-15 院長指示: 一覧にない馬（未登録）をその場で登録して選択できるように
+  const [nhNames, setNhNames] = useState("");
+  const [nhSex, setNhSex] = useState("牝");
+  const [nhAge, setNhAge] = useState("0");
+  const [nhOpen, setNhOpen] = useState(false);
   const [farmId, setFarmId] = useState("");
   const [selIds, setSelIds] = useState([]);
   const [visitDate, setVisitDate] = useState(todayJST());
@@ -2953,6 +2958,21 @@ function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, o
     return m;
   }, [cases]);
   const toggle = id => setSelIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const addNewHorses = () => {
+    if (!farmId || !onAddHorse) return;
+    const names = nhNames.split(/[、,，\n]+/).map(x => x.trim()).filter(Boolean);
+    if (!names.length) { alert("馬名を入力してください（複数は「、」区切り）"); return; }
+    const ids = [], skipped = [];
+    names.forEach(nm => {
+      const ex = horses.find(h => h.name === nm && h.farmId === Number(farmId) && !h.archived);
+      if (ex) { skipped.push(nm); ids.push(ex.id); return; }
+      const added = onAddHorse({ id: newRecordId(), name: nm, farmId: Number(farmId), breed: "サラブレッド", age: Number(nhAge) || 0, sex: nhSex, isKyosai: false, horseBilling: false });
+      if (added && added.id) ids.push(added.id);
+    });
+    setSelIds(p => p.concat(ids.filter(id => !p.includes(id))));
+    setNhNames(""); setNhOpen(false);
+    showToast("✓ " + (names.length - skipped.length) + "頭を馬マスターに登録して選択しました" + (skipped.length ? "（" + skipped.join("・") + " は登録済みのため選択のみ）" : ""));
+  };
   const visitFee = visitType === "初診" ? 1500 : visitType === "再診" ? 750 : 0;
   const treatTotal = selTreat.reduce((a, t) => a + (t.amount || 0), 0);
   const drugTotal = drugRows.reduce((a, r) => { const d = drugsMaster.find(x => x.id === Number(r.drugId)); return a + (d ? calcDrugLine(d, r.dose, r.useRx) : 0); }, 0);
@@ -3028,6 +3048,17 @@ function BatchKartePage({ horses, farms, drugsMaster, treatmentsMaster, cases, o
                 E("span", {style: {fontSize: 11, color: "#6b7280"}}, (h.sex || "") + (h.birthYear ? " " + h.birthYear : "")),
                 lv && E("span", {style: {fontSize: 10, color: already ? "#dc2626" : "#9ca3af", fontWeight: already ? 700 : 400}}, already ? "⚠ 同日カルテあり" : "前回 " + lv.slice(5).replace("-", "/")));
             })),
+          farmId && onAddHorse && E("div", {style: {marginTop: 8}},
+            !nhOpen ? E("button", {className: "btn btn-sm btn-secondary", onClick: () => setNhOpen(true)}, "＋ 一覧にない馬を登録して追加") :
+            E("div", {style: {padding: 10, border: "1px dashed #2563eb", borderRadius: 8, background: "#f8fbff"}},
+              E("div", {style: {fontSize: 12, fontWeight: 700, marginBottom: 6}}, "新しい馬を登録（" + (farm ? farm.name : "") + "）"),
+              E("input", {className: "inp-sm", value: nhNames, onChange: e => setNhNames(e.target.value), placeholder: "馬名（複数は「、」区切り 例: ○○の2026、△△の2026）", style: {width: "100%", marginBottom: 6}}),
+              E("div", {style: {display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", fontSize: 12}},
+                "性", ["牝", "牡", "セン"].map(sx => E("button", {key: sx, className: "tab-btn " + (nhSex === sx ? "active" : ""), style: {padding: "2px 8px", fontSize: 11}, onClick: () => setNhSex(sx)}, sx)),
+                E("span", {style: {marginLeft: 8}}, "年齢"), E("select", {className: "inp-sm", value: nhAge, onChange: e => setNhAge(e.target.value), style: {width: 80}}, ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"].map(a => E("option", {key: a, value: a}, a === "0" ? "当歳" : a + "歳"))),
+                E("span", {style: {flex: 1}}),
+                E("button", {className: "btn btn-sm btn-secondary", onClick: () => setNhOpen(false)}, "やめる"),
+                E("button", {className: "btn btn-sm btn-primary", onClick: addNewHorses}, "登録して選択")))),
           E("div", {style: {fontSize: 11, color: "#6b7280", marginTop: 6}}, selIds.length + "頭 選択中"))),
         card("② 日付・病名", E("div", null,
           E("div", {style: {display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end"}},
@@ -14064,6 +14095,7 @@ function App() {
       case "general_batch":
         return /*#__PURE__*/React.createElement(BatchKartePage, {
           horses: horses, farms: farms, drugsMaster: drugsMaster, treatmentsMaster: treatmentsMaster, cases: cases, currentVet: currentVet,
+          onAddHorse: h => { setHorses(p => [...p, h]); return h; },
           onBack: () => setPage("general"),
           onSaveMany: (list) => { const now = new Date().toISOString(); setCases(p => p.concat(list.map(c => Object.assign({}, c, {updatedAt: now})))); }
         });
