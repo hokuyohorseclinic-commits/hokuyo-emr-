@@ -3780,15 +3780,16 @@ function Sidebar({
     /*#__PURE__*/React.createElement("select", {
     value: currentVet || "\u4F50\u85E4",
     onChange: e => onVetChange(e.target.value),
-    style: {
+    style: {   // 2026-11-15 院長指示: 字が見えないので白地に濃い字ではっきり表示
       flex:1,
       padding: "6px 8px",
       borderRadius: 4,
-      border: "1px solid #4b5563",
-      background: "#1f2937",
-      color: "#fff",
-      fontSize: 12,
-      fontWeight: 500,
+      border: "2px solid " + ((currentVet || "佐藤") === "佐藤" ? "#3b82f6" : "#22c55e"),
+      background: "#ffffff",
+      color: "#111827",
+      WebkitTextFillColor: "#111827",
+      fontSize: 14,
+      fontWeight: 700,
       cursor: "pointer"
     }
   }, (vets||["佐藤","關"]).map(v => /*#__PURE__*/React.createElement("option", {key:v,value:v}, v))),
