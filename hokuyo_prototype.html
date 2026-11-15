@@ -13401,6 +13401,17 @@ function App() {
   const [gFilterYear, setGFilterYear] = useState(() => todayJST().slice(0, 4));   // 一般診療一覧は年→月で選ぶ（2026-11-14）
   const [gFilterMonth, setGFilterMonth] = useState(() => todayJST().slice(0, 7));   // 2026-11-14 院長指示: 一覧は今月から開く
   const [gFilterVet, setGFilterVet] = useState("");
+  // 2026-11-15 院長指示: 絞り込みは「1つ前に戻る」ができるように履歴を持つ。リセットは全期間ではなく今月に戻す
+  const gSnap = JSON.stringify([gFilterFarm, gFilterStatus, gFilterBilling, gFilterYear, gFilterMonth, gFilterVet]);
+  const gHist = React.useRef([]); const gPrevSnap = React.useRef(null); const gRestoring = React.useRef(false); const [gHistN, setGHistN] = useState(0);
+  React.useEffect(() => {
+    if (gPrevSnap.current !== null && !gRestoring.current && gPrevSnap.current !== gSnap) { gHist.current.push(gPrevSnap.current); if (gHist.current.length > 30) gHist.current.shift(); }
+    gRestoring.current = false; gPrevSnap.current = gSnap; setGHistN(gHist.current.length);
+  }, [gSnap]);
+  const gApply = a => { setGFilterFarm(a[0]); setGFilterStatus(a[1]); setGFilterBilling(a[2]); setGFilterYear(a[3]); setGFilterMonth(a[4]); setGFilterVet(a[5]); };
+  const gBack = () => { const p = gHist.current.pop(); if (!p) return; gRestoring.current = true; setGHistN(gHist.current.length); gApply(JSON.parse(p)); };
+  const gThisMonth = () => { setGFilterYear(todayJST().slice(0, 4)); setGFilterMonth(todayJST().slice(0, 7)); };
+  const gLastMonth = () => { const d = new Date(todayJST() + "T00:00:00"); d.setDate(1); d.setMonth(d.getMonth() - 1); const m = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); setGFilterYear(m.slice(0, 4)); setGFilterMonth(m); };
   const [bFilterVet, setBFilterVet] = useState("");
   const [pFilterVet, setPFilterVet] = useState("");
   // Report state
@@ -14663,7 +14674,9 @@ function App() {
       }
     }, "\u5E74\u30FB\u6708:"), /*#__PURE__*/React.createElement("div", {
       style: { display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }
-    }, gYears.map(y => /*#__PURE__*/React.createElement("button", {
+    }, React.createElement("button", { onClick: gThisMonth, className: `tab-btn ${gFilterMonth === todayJST().slice(0, 7) ? "active" : ""}`, style: { padding: "3px 12px", fontSize: 12, fontWeight: 700, border: "1.5px solid #1B4F8A" } }, "📅 今月"),
+      React.createElement("button", { onClick: gLastMonth, className: "tab-btn", style: { padding: "3px 10px", fontSize: 11, marginRight: 6 } }, "先月"),
+      gYears.map(y => /*#__PURE__*/React.createElement("button", {
       key: "y" + y,
       onClick: () => { setGFilterYear(y); setGFilterMonth(""); },
       className: `tab-btn ${gFilterYear === y ? "active" : ""}`,
@@ -14692,15 +14705,16 @@ function App() {
       /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:3}},
         /*#__PURE__*/React.createElement("button", {onClick:()=>setGFilterVet(""),className:`tab-btn ${gFilterVet===""?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, "全て"),
         vets.map(v => /*#__PURE__*/React.createElement("button", {key:v,onClick:()=>setGFilterVet(gFilterVet===v?"":v),className:`tab-btn ${gFilterVet===v?"active":""}`,style:{padding:"3px 10px",fontSize:11}}, v)))),
-    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterMonth || gFilterYear || gFilterVet) && /*#__PURE__*/React.createElement("button", {
+    gHistN > 0 && React.createElement("button", { onClick: gBack, className: "btn btn-sm btn-secondary", style: { fontSize: 11, padding: "3px 10px" }, title: "1つ前の絞り込みに戻す" }, "↩ 1つ前に戻る"),
+    (gFilterFarm || gFilterStatus || gFilterBilling || gFilterVet || gFilterYear !== todayJST().slice(0, 4) || gFilterMonth !== todayJST().slice(0, 7)) && /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         setGFilterFarm("");
         setGFilterStatus("");
         setGFilterBilling("");
-        setGFilterYear("");
-        setGFilterMonth("");
         setGFilterVet("");
+        gThisMonth();
       },
+      title: "絞り込みを外して今月の一覧に戻す",
       style: {
         fontSize: 11,
         color: "#ef4444",
@@ -14708,7 +14722,7 @@ function App() {
         border: "none",
         cursor: "pointer"
       }
-    }, "\xD7 \u30EA\u30BB\u30C3\u30C8")), listFarmBanner(gFilterFarm, () => setGFilterFarm("")), /*#__PURE__*/React.createElement("div", {
+    }, "× リセット（今月に戻す）")), listFarmBanner(gFilterFarm, () => setGFilterFarm("")), /*#__PURE__*/React.createElement("div", {
       className: "card",
       style: {
         overflow: "auto"
