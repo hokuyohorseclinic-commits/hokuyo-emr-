@@ -304,41 +304,88 @@ window.addEventListener("pagehide", function() { try { _flushItemSyncNow(); } ca
 document.addEventListener("visibilitychange", function() { if (document.visibilityState === "hidden") { try { _flushItemSyncNow(); } catch(e) {} } });
 
 // ─── 自動バックアップ（1日1回、Firebaseに保存）───
+// 2026-11-16 院長指示: 数年使えるように分割保存（Firestoreの1件1MB上限を超えない）＋同期項目（ToDo・書類履歴など）も含める
+//   ・直近30日は毎日、それより前は毎月1日の分だけ残す
+//   ・この端末で「毎月ファイル保存」をオンにしていれば、月1回バックアップファイルをダウンロード（Googleドライブのフォルダに保存すれば両方に残る）
+var BK_PART = 700000;
+function _backupPayloadJSON() {
+  var clinicData = lsGetData();
+  if (!clinicData) return null;
+  var parsed = JSON.parse(clinicData);
+  try {
+    (typeof SYNC_FIELDS !== "undefined" ? SYNC_FIELDS : []).forEach(function (f) {
+      if (parsed[f] === undefined && _lastRemoteJSON && _lastRemoteJSON[f]) { try { parsed[f] = JSON.parse(_lastRemoteJSON[f]); } catch (e) {} }
+    });
+  } catch (e) {}
+  return { parsed: parsed, json: JSON.stringify(parsed) };
+}
+function _pruneOldBackups() {
+  try {
+    var cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    firebaseDB.collection("backups").where("createdAt", "<", cutoff).get().then(function (snap) {
+      snap.forEach(function (doc) {
+        if (/-01$/.test(doc.id)) return;   // 毎月1日の分は残す
+        var n = (doc.data() || {}).parts || 0;
+        for (var i = 0; i < n; i++) firebaseDB.collection("backups").doc(doc.id + "__p" + i).delete().catch(function () {});
+        doc.ref.delete().catch(function () {});
+      });
+    }).catch(function () {});
+  } catch (e) {}
+}
+function _monthlyFileBackup(json) {
+  try {
+    if (localStorage.getItem("hokuyo_monthly_file") !== "1") return;
+    var ym = todayJST().slice(0, 7);
+    if (localStorage.getItem("hokuyo_last_file_month") === ym) return;
+    var o = JSON.parse(json); delete o.calCfg;   // カレンダーの合言葉はファイルに入れない
+    var blob = new Blob([JSON.stringify(o)], { type: "application/json" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "hokuyo_backup_" + todayJST() + ".json";
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    localStorage.setItem("hokuyo_last_file_month", ym);
+    _addDebug("月次バックアップファイルを保存: " + a.download);
+  } catch (e) { console.error("[Backup] 月次ファイル保存エラー", e); }
+}
 function _autoBackupToFirebase() {
   if (!FIREBASE_ENABLED || !firebaseDB || !_firestoreWriteEnabled) return;
   var now = Date.now();
   var ONE_DAY = 24 * 60 * 60 * 1000;
   var lastBackup = parseInt(localStorage.getItem("hokuyo_last_backup") || "0");
-  if (now - lastBackup < ONE_DAY) return;
   // v2: カルテの初回受信が終わるまではバックアップしない（古いローカルを保存しないため）
   if (!_itemState.cases.ready) return;
-
-  var clinicData = lsGetData();
-  if (!clinicData) return;
-
+  var pj = null;
+  try { pj = _backupPayloadJSON(); } catch (e) { console.error("[Backup] 準備エラー", e); return; }
+  if (!pj) return;
+  var casesCount = pj.parsed.cases ? pj.parsed.cases.length : 0;
+  if (casesCount < 100) { console.log("[Backup] カルテ数が少なすぎるためスキップ: " + casesCount); return; }
+  _monthlyFileBackup(pj.json);
+  if (now - lastBackup < ONE_DAY) return;
   try {
-    var parsed = JSON.parse(clinicData);
-    var casesCount = parsed.cases ? parsed.cases.length : 0;
-    if (casesCount < 100) {
-      console.log("[Backup] カルテ数が少なすぎるためスキップ: " + casesCount);
-      return;
-    }
     var _now = new Date();
     _now.setMinutes(_now.getMinutes() + _now.getTimezoneOffset() + 540); // JST
     var backupDate = _now.getFullYear() + "-" + String(_now.getMonth()+1).padStart(2,"0") + "-" + String(_now.getDate()).padStart(2,"0");
     var backupId = "backup_" + backupDate;
-    var backupPayload = clinicData.length > 700000 ? LZString.compressToBase64(clinicData) : clinicData;
-    firebaseDB.collection("backups").doc(backupId).set({
-      data: backupPayload,
-      compressed: backupPayload === clinicData ? "" : "lz64",
-      casesCount: casesCount,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      deviceId: _deviceId
+    var payload = LZString.compressToBase64(pj.json);
+    var parts = [];
+    for (var i = 0; i < payload.length; i += BK_PART) parts.push(payload.slice(i, i + BK_PART));
+    var col = firebaseDB.collection("backups");
+    var writes = parts.length > 1 ? parts.map(function (p, idx) { return col.doc(backupId + "__p" + idx).set({ data: p, partOf: backupId, idx: idx }); }) : [];
+    Promise.all(writes).then(function () {
+      return col.doc(backupId).set({
+        data: parts.length > 1 ? "" : payload,
+        parts: parts.length > 1 ? parts.length : 0,
+        compressed: "lz64",
+        size: payload.length,
+        casesCount: casesCount,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        deviceId: _deviceId
+      });
     }).then(function() {
       localStorage.setItem("hokuyo_last_backup", String(now));
-      _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件)");
+      _addDebug("自動バックアップ完了: " + backupId + " (" + casesCount + "件・" + parts.length + "分割)");
+      _pruneOldBackups();
     }).catch(function(err) {
       console.error("[Backup] バックアップエラー:", err);
+      _addDebug("⚠ 自動バックアップ失敗: " + (err && err.message || err));
     });
   } catch(e) {
     console.error("[Backup] バックアップ処理エラー:", e);
@@ -3900,7 +3947,9 @@ function Sidebar({
         }, "\u5FA9\u5143")
       );
     })
-  ), /*#__PURE__*/React.createElement("button", {
+  ), React.createElement("label", { title: "月に1回、この端末を開いたときにバックアップファイル（.json）をダウンロードします。Chromeの保存先をGoogleドライブのフォルダにすればドライブにも残ります。", style: { display: "flex", alignItems: "center", gap: 4, marginTop: 6, fontSize: 10, color: "#9ca3af", cursor: "pointer" } },
+    React.createElement("input", { type: "checkbox", defaultChecked: localStorage.getItem("hokuyo_monthly_file") === "1", onChange: function (e) { localStorage.setItem("hokuyo_monthly_file", e.target.checked ? "1" : "0"); if (e.target.checked) { localStorage.removeItem("hokuyo_last_file_month"); alert("この端末で、毎月1回バックアップファイルを保存します（次にカルテを開いたときに今月分を保存）。"); } } }),
+    "この端末で毎月ファイル保存"), /*#__PURE__*/React.createElement("button", {
     onClick: doLogout,
     style: {
       padding: "6px 8px",
@@ -13559,7 +13608,7 @@ function App() {
   const loadBackupList = () => {
     if (!FIREBASE_ENABLED || !firebaseDB) { alert("Firebase未接続"); return; }
     setLoadingBackups(true);
-    firebaseDB.collection("backups").orderBy("createdAt", "desc").limit(7).get()
+    firebaseDB.collection("backups").orderBy("createdAt", "desc").limit(10).get()
       .then(function(snapshot) {
         var list = [];
         snapshot.forEach(function(doc) {
@@ -13583,8 +13632,11 @@ function App() {
     if (!confirm("バックアップ「" + backupId + "」からデータを復元しますか？\n現在のデータは上書きされます。")) return;
     firebaseDB.collection("backups").doc(backupId).get().then(function(doc) {
       if (!doc.exists) { alert("バックアップが見つかりません"); return; }
-      var backupData = doc.data().data;
-      if (doc.data().compressed === "lz64") backupData = LZString.decompressFromBase64(backupData);
+      var meta = doc.data();
+      var nParts = meta.parts || 0;
+      var partsP = nParts ? Promise.all(Array.from({length: nParts}, function (_, i) { return firebaseDB.collection("backups").doc(backupId + "__p" + i).get().then(function (p) { if (!p.exists) throw new Error("分割データ " + (i + 1) + "/" + nParts + " が見つかりません"); return p.data().data; }); })).then(function (arr) { return arr.join(""); }) : Promise.resolve(meta.data);
+      return partsP.then(function (backupData) {
+      if (meta.compressed === "lz64") backupData = LZString.decompressFromBase64(backupData);
       if (!backupData || backupData.charAt(0) !== "{") { alert("バックアップデータの展開に失敗しました"); return; }
       lsSetData(backupData);
       clearLocalSyncState();
@@ -13596,6 +13648,7 @@ function App() {
       }
       pushP.then(function() { alert("復元完了！ページを再読み込みします。"); window.location.reload(); })
         .catch(function(e) { alert("クラウドへの反映でエラー: " + (e.message || e) + "\nこの端末には復元済みです。再読み込みします。"); window.location.reload(); });
+      });
     }).catch(function(e) { alert("復元エラー: " + e.message); });
   };
 
