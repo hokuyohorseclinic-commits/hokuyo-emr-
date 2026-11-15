@@ -1748,6 +1748,9 @@ function kmSelect(val, setVal, style) {
     React.createElement("option", { value: "" }, "なし"),
     opts.map(function (n) { return React.createElement("option", { key: n, value: String(n) }, n + "km"); }));
 }
+// 2026-11-15 院長指示: 担当獣医師は来院行ごとに記録されるので、一覧の絞り込み・件数も来院行の担当で数える
+function gVetsOf(c) { var s = {}; (c.visits || []).forEach(function (v) { s[v.vet || c.vet || "佐藤"] = 1; }); if (!Object.keys(s).length) s[c.vet || "佐藤"] = 1; return Object.keys(s); }
+function gLastVet(c) { var lv = null; (c.visits || []).forEach(function (v) { if (!lv || (v.date || "") >= (lv.date || "")) lv = v; }); return (lv && lv.vet) || c.vet || "佐藤"; }
 function calcVisitTotal(v,dm){
 if(v.totalFee)return Number(v.totalFee);
 var viFee=Number(v.visitFee||0);
@@ -14506,7 +14509,7 @@ function App() {
       if (gFilterBilling && e.bc !== gFilterBilling) return false;
       if (gFilterYear && !(e.mm || "").startsWith(gFilterYear)) return false;
       if (gFilterMonth && e.mm !== gFilterMonth) return false;
-      if (gFilterVet && (e.c.vet || "佐藤") !== gFilterVet) return false;
+      if (gFilterVet && gVetsOf(e.c).indexOf(gFilterVet) < 0) return false;
       if (gFilterDx && (e.c.diagnosis || "") !== gFilterDx) return false;
       return true;
     });
@@ -14558,7 +14561,7 @@ function App() {
       const horsesN = new Set(filtered.map(e => e.c.horseId)).size;
       const amt = filtered.reduce((a, e) => a + (e.t || 0), 0);
       const cnt = (fn) => { const m = {}; filtered.forEach(e => { const k = fn(e); if (k) m[k] = (m[k] || 0) + 1; }); return Object.keys(m).map(k => [k, m[k]]).sort((a, b) => b[1] - a[1]); };
-      const st = cnt(e => e.c.caseStatus || "継続中"), vt = cnt(e => e.c.vet || "佐藤"), dx = cnt(e => e.c.diagnosis || ""), fm = cnt(e => e.f?.name || "");
+      const st = cnt(e => e.c.caseStatus || "継続中"), vt = (() => { const m = {}; filtered.forEach(e => gVetsOf(e.c).forEach(v => { m[v] = (m[v] || 0) + 1; })); return Object.keys(m).map(k => [k, m[k]]).sort((a, b) => b[1] - a[1]); })(), dx = cnt(e => e.c.diagnosis || ""), fm = cnt(e => e.f?.name || "");
       const per = gFilterMonth ? (Number(gFilterMonth.slice(0, 4)) + "年" + Number(gFilterMonth.slice(5, 7)) + "月") : gFilterYear ? gFilterYear + "年" : "全期間";
       const label = [per, gFilterFarm, gFilterDx, gFilterStatus, gFilterVet && (gFilterVet + "先生"), gFilterBilling].filter(Boolean).join(" ／ ");
       const chip = (text, bg, c, on, onClick, key) => React.createElement("span", { key: key || text, onClick: onClick, title: onClick ? (on ? "絞り込みを解除" : "これで絞り込む") : "", style: { background: bg, color: c, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", cursor: onClick ? "pointer" : "default", border: on ? "2px solid " + c : "2px solid transparent" } }, text);
@@ -14855,7 +14858,7 @@ function App() {
         fontWeight: lastVisit !== c.openDate ? 600 : 400,
         color: lastVisit !== c.openDate ? "#b45309" : "#6b7280"
       }
-    }, lastVisit || c.openDate), /*#__PURE__*/React.createElement("td", {
+    }, lastVisit || c.openDate, gVetsOf(c).map(vn => React.createElement("span", { key: vn, title: "担当獣医師（来院行の記録）", style: { marginLeft: 4, fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 8, background: vn === "佐藤" ? "#dbeafe" : "#dcfce7", color: vn === "佐藤" ? "#1e40af" : "#166534" } }, vn))), /*#__PURE__*/React.createElement("td", {
       style: {
         fontWeight: 600
       }
