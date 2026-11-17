@@ -2922,6 +2922,32 @@ function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone 
   const [showAll, setShowAll] = useState(false);
   const [replyFor, setReplyFor] = useState(null);
   const [replyText, setReplyText] = useState("");
+  // 2026-11-17 院長指示: マイクを押して話すと文字になる（音声入力）。「改行」「次の馬」で1頭ずつ改行
+  const [listening, setListening] = useState(false);
+  const recRef = React.useRef(null); const wantRef = React.useRef(false); const baseRef = React.useRef("");
+  const SR = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const fixSpoken = t => t.replace(/\s*(改行|次の馬)\s*/g, "\n");
+  const startMic = () => {
+    if (!SR) { alert("この端末・ブラウザでは、アプリのマイクボタンが使えません。\nキーボードのマイク（🎤）を押して話してください。"); return; }
+    try {
+      const r = new SR(); r.lang = "ja-JP"; r.continuous = true; r.interimResults = true;
+      baseRef.current = text ? (text.endsWith("\n") || text.endsWith(" ") ? text : text + " ") : "";
+      let finals = "";
+      r.onresult = ev => {
+        let interim = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) { const tr = ev.results[i][0].transcript; if (ev.results[i].isFinal) finals += tr; else interim += tr; }
+        setText(baseRef.current + fixSpoken(finals + interim));
+      };
+      r.onerror = ev => { if (ev.error === "not-allowed" || ev.error === "service-not-allowed") { wantRef.current = false; setListening(false); alert("マイクの使用が許可されていません。ブラウザの設定でマイクを許可してください。\n（またはキーボードのマイクで話してください）"); } };
+      r.onend = () => {
+        baseRef.current = baseRef.current + fixSpoken(finals); finals = "";
+        if (wantRef.current) { try { r.start(); } catch (e) { wantRef.current = false; setListening(false); } } else setListening(false);
+      };
+      recRef.current = r; wantRef.current = true; setListening(true); r.start();
+    } catch (e) { setListening(false); alert("音声入力を開始できませんでした: " + (e.message || e)); }
+  };
+  const stopMic = () => { wantRef.current = false; try { recRef.current && recRef.current.stop(); } catch (e) {} setListening(false); };
+  React.useEffect(() => () => { wantRef.current = false; try { recRef.current && recRef.current.abort(); } catch (e) {} }, []);
   const list = (memos || []).slice().sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const pending = list.filter(m => m.status !== "処理済" && m.status !== "削除");
   const shown = showAll ? list.filter(m => m.status !== "削除").slice(0, 50) : pending;
@@ -2951,9 +2977,10 @@ function MemoInbox({ memos, onUpdate, onOpenCase, cases, horses, compact, phone 
       E("button", {className: "btn btn-sm btn-secondary", style: {fontSize: 11}, onClick: () => setShowAll(!showAll)}, showAll ? "未処理だけ" : "処理済も表示")),
     E("div", {style: {padding: big ? 14 : 10, background: "#fff"}},
       E("textarea", {value: text, onChange: e => setText(e.target.value), rows: big ? 4 : 2, placeholder: "例: 10/27 北洋牧場 アリシアン 疝痛 再診 筋注 バナミン10ml 車20km\n（iPhoneはキーボードのマイクで話せます。1頭1行）", style: {width: "100%", fontSize: big ? 17 : 13, padding: 10, border: "1px solid #d1d5db", borderRadius: 8, boxSizing: "border-box", resize: "vertical", lineHeight: 1.5}}),
-      E("div", {style: {display: "flex", gap: 8, marginTop: 6, alignItems: "center"}},
-        E("span", {style: {fontSize: 11, color: "#6b7280", flex: 1}}, "保存したメモは Claude がカルテにします。確定前のカルテは「確認が必要なカルテ」に出ます。"),
-        E("button", {className: "btn btn-primary", onClick: save, disabled: !text.trim(), style: big ? {padding: "10px 24px", fontSize: 16} : {}}, "保存"))),
+      E("div", {style: {display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap"}},
+        E("button", {onClick: listening ? stopMic : startMic, title: "押して話すと文字になります。「改行」「次の馬」と言うと次の行へ。", style: {padding: big ? "12px 18px" : "6px 12px", fontSize: big ? 17 : 13, fontWeight: 700, borderRadius: 999, border: "none", cursor: "pointer", color: "#fff", background: listening ? "#dc2626" : "#1B4F8A", boxShadow: listening ? "0 0 0 4px #fecaca" : "none", minWidth: big ? 150 : 0}}, listening ? "■ 止める（聞き取り中…）" : "🎤 話して入力"),
+        E("span", {style: {fontSize: 11, color: "#6b7280", flex: 1, minWidth: 160}}, listening ? "話した内容が上に入ります。「改行」「次の馬」で次の行へ。終わったら止めて「保存」。" : "保存したメモは Claude がカルテにします。確定前のカルテは「確認が必要なカルテ」に出ます。"),
+        E("button", {className: "btn btn-primary", onClick: () => { if (listening) { wantRef.current = false; try { recRef.current && recRef.current.abort(); } catch (e) {} setListening(false); } save(); }, disabled: !text.trim(), style: big ? {padding: "10px 24px", fontSize: 16} : {}}, "保存"))),
     shown.length > 0 && E("div", {style: {maxHeight: phone ? "none" : 300, overflowY: "auto", borderTop: "1px solid #f3f4f6"}},
       shown.map(m => E("div", {key: m.id, style: {padding: "8px 12px", borderBottom: "1px solid #f9fafb", fontSize: big ? 15 : 12, background: m.status === "要確認" ? "#fef2f2" : m.status === "処理済" ? "#f9fafb" : "#fff"}},
         E("div", {style: {display: "flex", alignItems: "center", gap: 8, marginBottom: 2}},
