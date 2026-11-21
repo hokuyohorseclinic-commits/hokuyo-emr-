@@ -4390,6 +4390,21 @@ function LabTrendPanel({ visits }) {
       }), hasOther && h("tr", null, h("td", { style: Object.assign({}, td, { textAlign: "left", fontWeight: 600 }) }, "その他"), vs.map(function (v, i) { return h("td", { key: i, style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) }, cleanLabs(v.labs).other || ""); }))))));
 }
 
+// 2026-11-21 院長指示: 投薬量はプルダウン（1〜10は1刻み、以降は5刻み）。端数や大きい量は「その他」で手入力
+var DOSE_OPTIONS = (function(){ var a = []; for (var n = 1; n <= 10; n++) a.push(n); for (var m = 15; m <= 100; m += 5) a.push(m); return a; })();
+function DoseSelect({ value, onChange }) {
+  const v = value == null ? "" : String(value);
+  const inList = v === "" || DOSE_OPTIONS.indexOf(Number(v)) >= 0;
+  const [free, setFree] = useState(!inList);
+  const st = { padding: "4px 6px", borderRadius: 4, border: "1px solid #d1d5db", textAlign: "center", fontSize: 13, fontWeight: 600 };
+  if (free || !inList) return React.createElement("span", { style: { display: "inline-flex", gap: 2, alignItems: "center" } },
+    React.createElement("input", { type: "number", inputMode: "decimal", value: v, autoFocus: free && inList, onChange: e => onChange(e.target.value), style: Object.assign({ width: 60 }, st) }),
+    React.createElement("button", { onClick: () => { setFree(false); if (DOSE_OPTIONS.indexOf(Number(v)) < 0) onChange("1"); }, title: "プルダウンに戻す", style: { fontSize: 10, border: "none", background: "none", color: "#2563eb", cursor: "pointer", padding: 0 } }, "▼"));
+  return React.createElement("select", { value: v, onChange: e => { if (e.target.value === "__free") setFree(true); else onChange(e.target.value); }, style: Object.assign({ width: 66 }, st) },
+    v === "" && React.createElement("option", { value: "" }, "—"),
+    DOSE_OPTIONS.map(n => React.createElement("option", { key: n, value: String(n) }, n)),
+    React.createElement("option", { value: "__free" }, "その他…"));
+}
 function GeneralKartePage({
   kase,
   horses,
@@ -5357,20 +5372,7 @@ function GeneralKartePage({
         alignItems: "center",
         gap: 3
       }
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: row.dose,
-      onChange: e => updateDrugRow(i, "dose", e.target.value),
-      style: {
-        width: 60,
-        padding: "4px 6px",
-        borderRadius: 4,
-        border: "1px solid #d1d5db",
-        textAlign: "center",
-        fontSize: 12,
-        fontWeight: 600
-      }
-    }), /*#__PURE__*/React.createElement("span", {
+    }, React.createElement(DoseSelect, { value: row.dose, onChange: v => updateDrugRow(i, "dose", v) }), /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
         color: "#6b7280"
