@@ -70,6 +70,19 @@ select.inp{font-size:17px;min-height:44px}
    馬名などが1文字ずつ折り返す（縦書きに見える）のを防ぐ。標準のときは何も変わらない */
 html.ui-zoomed table{width:auto;min-width:100%}
 html.ui-zoomed table th,html.ui-zoomed table td{white-space:nowrap}
+/* 2026-11-22 院長指示: iPad（縦・横）でレイアウトが崩れないように。パソコンの画面は変えない */
+.sb-toggle,.sb-backdrop{display:none}
+.gk-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}
+.gk-head{flex-wrap:wrap;gap:10px}.gk-head>div:last-child{flex-wrap:wrap}
+@media(max-width:1400px){.gk-outer{grid-template-columns:minmax(0,1fr)!important}.gk-side{position:static!important;max-height:none!important}}
+@media(max-width:700px){.gk-form{grid-template-columns:minmax(0,1fr)!important}}
+@media(max-width:1024px){
+.app-sidebar{position:fixed!important;left:0;top:0;bottom:0;z-index:2000;transform:translateX(-100%);transition:transform .2s;overflow-y:auto;min-height:0!important}
+body.sb-open .app-sidebar{transform:none;box-shadow:4px 0 24px rgba(0,0,0,.35)}
+.sb-toggle{display:flex;position:fixed;left:10px;top:10px;z-index:1999;width:44px;height:44px;border-radius:10px;border:none;background:#111827;color:#fff;font-size:22px;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer}
+body.sb-open .sb-backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1998}
+.app-page{padding:64px 14px 24px!important}
+}
 </style>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2">
@@ -93,6 +106,17 @@ html.ui-zoomed table th,html.ui-zoomed table td{white-space:nowrap}
   </div>
 </div>
 <div id="root" style="display:none"></div>
+<script>
+// 2026-11-22 iPad縦向きなど幅の狭い画面: 左メニューを「☰」で出し入れ（メニューを押すと閉じる）
+(function(){
+  var b=document.createElement("button"); b.className="sb-toggle"; b.textContent="\u2630"; b.title="メニュー";
+  var k=document.createElement("div"); k.className="sb-backdrop";
+  b.onclick=function(){document.body.classList.toggle("sb-open");};
+  k.onclick=function(){document.body.classList.remove("sb-open");};
+  document.body.appendChild(b); document.body.appendChild(k);
+  document.addEventListener("click",function(e){ var t=e.target; if(t&&t.closest&&t.closest(".app-sidebar nav button")) document.body.classList.remove("sb-open"); },true);
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- Firebase SDK (compat mode for non-build-tool usage) -->
 <script>/* lz-string 1.5.0 (MIT) — localStorage 圧縮用 */
@@ -3764,6 +3788,7 @@ function Sidebar({
     label: "マスター管理"
   }];
   return /*#__PURE__*/React.createElement("div", {
+    className: "app-sidebar",
     style: {
       width: 210,
       background: "#111827",
@@ -4846,12 +4871,14 @@ function GeneralKartePage({
   }));
 
   return /*#__PURE__*/React.createElement("div", {
+    className: "gk-outer",
     style: {
       display: "grid",
       gridTemplateColumns: "1fr 320px",
       gap: 16
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", { style: { minWidth: 0 } }, /*#__PURE__*/React.createElement("div", {
+    className: "gk-head",
     style: {
       display: "flex",
       alignItems: "center",
@@ -4952,6 +4979,7 @@ function GeneralKartePage({
   }, "\u521D\u8A3A: ", kase?.openDate, " \uFF5C \u8A3A\u7642: ", pastVisits.length, "\u56DE \uFF5C \u7D2F\u8A08: \xA5", pastTotal.toLocaleString())), /*#__PURE__*/React.createElement("span", {
     className: "badge badge-blue"
   }, "\u7D99\u7D9A\u4E2D"))), /*#__PURE__*/React.createElement("div", {
+    className: "gk-form",
     style: {
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
@@ -5634,6 +5662,7 @@ function GeneralKartePage({
       fontSize: 11
     }
   })))))), /*#__PURE__*/React.createElement("div", {
+    className: "gk-side",
     style: {
       position: "sticky",
       top: 16,
@@ -11229,7 +11258,7 @@ function DashboardPage({
   }, "\uFF0B \u7E41\u6B96\u30AB\u30EB\u30C6"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
-      gridTemplateColumns: "repeat(4,1fr)",
+      gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
       gap: 16,
       marginBottom: 24
     }
@@ -15901,13 +15930,15 @@ function App() {
       );
     })()
   }), /*#__PURE__*/React.createElement("div", {
+    className: "app-main",
     style: {
       flex: 1,
+      minWidth: 0,
       overflowY: "auto",
       maxHeight: "100vh"
     }
   }, FIREBASE_ENABLED && /*#__PURE__*/React.createElement(SyncBanner, { onOpen: () => setShowSyncPanel(true) }),
-     /*#__PURE__*/React.createElement("div", { style: { padding: 24 } }, renderPage())),
+     /*#__PURE__*/React.createElement("div", { className: "app-page", style: { padding: 24 } }, renderPage())),
   showSyncPanel && /*#__PURE__*/React.createElement(SyncPanel, { onClose: () => setShowSyncPanel(false), tick: syncTick, horses: horses, farms: farms, cases: cases, setHorses: setHorses, setCases: setCases, setFarms: setFarms }), showNewHorse && /*#__PURE__*/React.createElement(NewHorseModal, {
     farms: farms,
     onSave: h => {
