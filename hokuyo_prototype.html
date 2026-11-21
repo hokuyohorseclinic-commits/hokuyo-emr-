@@ -4405,6 +4405,100 @@ function DoseSelect({ value, onChange }) {
     DOSE_OPTIONS.map(n => React.createElement("option", { key: n, value: String(n) }, n)),
     React.createElement("option", { value: "__free" }, "その他…"));
 }
+// ═══════════════ 2026-11-21 院長指示: 症例の経過まとめ（グラフ・数値表・治療経過・写真、金額なし、印刷可） ═══════════════
+var VITAL_ITEMS = [{ k: "T", u: "℃", f: "t" }, { k: "P", u: "/min", f: "p" }, { k: "R", u: "/min", f: "r" }];
+function summaryNum(x) { var n = parseFloat(String(x == null ? "" : x).replace(/,/g, "")); return isFinite(n) ? n : null; }
+function SummaryChart({ title, unit, pts, color }) {
+  const h = React.createElement;
+  const W = 300, H = 140, L = 22, R = 22, T = 34, B = 24;
+  const vals = pts.map(p => p.v);
+  let mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+  if (mn === mx) { mn = mn - Math.abs(mn || 1) * 0.1; mx = mx + Math.abs(mx || 1) * 0.1; }
+  const pad = (mx - mn) * 0.12; mn -= pad; mx += pad;
+  const x = i => pts.length === 1 ? (L + (W - L - R) / 2) : L + (W - L - R) * i / (pts.length - 1);
+  const y = v => T + (H - T - B) * (1 - (v - mn) / (mx - mn));
+  return h("svg", { width: W, height: H, viewBox: "0 0 " + W + " " + H, style: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6 } },
+    h("text", { x: 8, y: 15, fontSize: 12, fontWeight: 700, fill: "#111827" }, title, h("tspan", { fontSize: 9, fill: "#9ca3af", fontWeight: 400 }, " " + (unit || ""))),
+    [0, 0.5, 1].map(f => { const v = mn + (mx - mn) * f; return h("g", { key: f },
+      h("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#f3f4f6" })); }),
+    pts.length > 1 && h("polyline", { points: pts.map((p, i) => x(i) + "," + y(p.v)).join(" "), fill: "none", stroke: color, strokeWidth: 2 }),
+    pts.map((p, i) => h("g", { key: i },
+      h("circle", { cx: x(i), cy: y(p.v), r: 3.5, fill: color }),
+      h("text", { x: x(i), y: y(p.v) - 7, fontSize: 9, fill: "#374151", textAnchor: "middle" }, p.raw),
+      h("text", { x: x(i), y: H - 8, fontSize: 9, fill: "#6b7280", textAnchor: "middle" }, (p.date || "").slice(5).replace("-", "/")))));
+}
+function CaseSummary({ kase, horse, farm, drugsMaster, photos, onClose }) {
+  const h = React.createElement;
+  const ref = useRef(null);
+  const visits = (kase.visits || []).slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const series = [];
+  VITAL_ITEMS.forEach(it => { const pts = visits.map(v => ({ date: v.date, raw: v.vitals && v.vitals[it.f], v: summaryNum(v.vitals && v.vitals[it.f]) })).filter(p => p.v != null); if (pts.length) series.push({ k: it.k, u: it.u, pts: pts, color: "#0f766e" }); });
+  LAB_ITEMS.forEach(it => { const pts = visits.map(v => ({ date: v.date, raw: cleanLabs(v.labs)[it.k], v: summaryNum(cleanLabs(v.labs)[it.k]) })).filter(p => p.v != null); if (pts.length) series.push({ k: it.k, u: it.u, pts: pts, color: "#b91c1c" }); });
+  const [sel, setSel] = useState(() => { const o = {}; series.forEach(s => { o[s.k] = true; }); return o; });
+  const numVisits = visits.filter(v => VITAL_ITEMS.some(it => v.vitals && String(v.vitals[it.f] || "").trim()) || Object.keys(cleanLabs(v.labs)).length);
+  const rows = series.map(s => s.k);
+  const hasOther = visits.some(v => cleanLabs(v.labs).other);
+  const cell = (v, k) => { const it = VITAL_ITEMS.find(x => x.k === k); return it ? (v.vitals && v.vitals[it.f]) || "" : cleanLabs(v.labs)[k] || ""; };
+  const drugName = r => { const d = (drugsMaster || []).find(x => x.id === Number(r.drugId)); return (d ? d.name : "薬品") + " " + (r.dose != null && r.dose !== "" ? r.dose : "") + (r.unit || (d ? d.unit : "") || ""); };
+  const byDate = {}; (photos || []).forEach(p => { (byDate[p.date || ""] = byDate[p.date || ""] || []).push(p); });
+  const photoDates = Object.keys(byDate).sort();
+  const vets = Array.from(new Set(visits.map(v => v.vet || kase.vet).filter(Boolean)));
+  const last = visits.length ? visits[visits.length - 1].date : kase.openDate;
+  const sec = t => h("h3", { style: { fontSize: 14, fontWeight: 700, margin: "18px 0 8px", borderLeft: "4px solid #0f766e", paddingLeft: 8 } }, t);
+  const th = { padding: "4px 8px", borderBottom: "1px solid #d1d5db", background: "#f9fafb", fontSize: 11, whiteSpace: "nowrap" };
+  const td = { padding: "4px 8px", borderBottom: "1px solid #f3f4f6", fontSize: 12, textAlign: "right", whiteSpace: "nowrap" };
+  const doPrint = () => {
+    const w = window.open("", "_blank"); if (!w) { alert("ポップアップがブロックされました"); return; }
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + (horse ? horse.name : "") + ' 経過まとめ</title><style>body{font-family:-apple-system,"Hiragino Sans",sans-serif;margin:16px;color:#111}.no-print{display:none!important}table{border-collapse:collapse}img{max-width:100%}@page{size:A4;margin:12mm}</style></head><body>' + ref.current.innerHTML + '<script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>');
+    w.document.close();
+  };
+  return h("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9000, overflowY: "auto", padding: "16px 8px" }, onClick: onClose },
+    h("div", { onClick: e => e.stopPropagation(), style: { background: "#fff", maxWidth: 980, margin: "0 auto", borderRadius: 12, padding: 20 } },
+      h("div", { className: "no-print", style: { display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 } },
+        h("button", { className: "btn btn-primary", onClick: doPrint, style: { padding: "6px 16px" } }, "🖨 印刷・PDF"),
+        h("button", { className: "btn btn-secondary", onClick: onClose, style: { padding: "6px 16px" } }, "閉じる")),
+      h("div", { ref: ref },
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "2px solid #0f766e", paddingBottom: 6 } },
+          h("div", null,
+            h("div", { style: { fontSize: 20, fontWeight: 700 } }, "経過まとめ　", horse ? horse.name : ""),
+            h("div", { style: { fontSize: 13, color: "#374151", marginTop: 2 } }, (farm ? farm.name + "　" : ""), "病名：", kase.diagnosis || "", "　期間：", kase.openDate || "", " 〜 ", last || "", "（", visits.length, "回）")),
+          h("div", { style: { fontSize: 11, color: "#374151", textAlign: "right" } }, "北洋ホースクリニック", h("br"), vets.length ? "担当：" + vets.join("・") : "")),
+        series.length > 0 && h("div", null,
+          sec("グラフ"),
+          h("div", { className: "no-print", style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } }, series.map(s =>
+            h("button", { key: s.k, onClick: () => setSel(p => Object.assign({}, p, { [s.k]: !p[s.k] })), style: { fontSize: 11, padding: "2px 10px", borderRadius: 12, cursor: "pointer", border: "1px solid " + s.color, background: sel[s.k] ? s.color : "#fff", color: sel[s.k] ? "#fff" : s.color } }, s.k))),
+          h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } }, series.filter(s => sel[s.k]).map(s => h(SummaryChart, { key: s.k, title: s.k, unit: s.u, pts: s.pts, color: s.color })))),
+        numVisits.length > 0 && h("div", null,
+          sec("数値の推移"),
+          h("div", { style: { overflowX: "auto" } }, h("table", null,
+            h("thead", null, h("tr", null, h("th", { style: Object.assign({}, th, { textAlign: "left" }) }, ""), numVisits.map((v, i) => h("th", { key: i, style: Object.assign({}, th, { textAlign: "right", minWidth: 64 }) }, (v.date || "").slice(5).replace("-", "/"))))),
+            h("tbody", null, rows.map(k => {
+              const s = series.find(x => x.k === k);
+              let prev = null;
+              return h("tr", { key: k }, h("td", { style: Object.assign({}, td, { textAlign: "left", fontWeight: 600 }) }, k, h("span", { style: { fontSize: 9, color: "#9ca3af", fontWeight: 400 } }, " ", s ? s.u : "")),
+                numVisits.map((v, i) => { const raw = cell(v, k); const n = summaryNum(raw); let mark = null, col = "#111827";
+                  if (n != null && prev != null && n !== prev) { mark = n > prev ? " ▲" : " ▼"; col = n > prev ? "#dc2626" : "#2563eb"; }
+                  if (n != null) prev = n;
+                  return h("td", { key: i, style: Object.assign({}, td, { color: col }) }, raw, mark && h("span", { style: { fontSize: 9 } }, mark)); }));
+            }), hasOther && h("tr", null, h("td", { style: Object.assign({}, td, { textAlign: "left", fontWeight: 600 }) }, "その他"), numVisits.map((v, i) => h("td", { key: i, style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) }, cleanLabs(v.labs).other || ""))))))),
+        sec("治療の経過"),
+        h("table", { style: { width: "100%" } },
+          h("thead", null, h("tr", null, ["日付", "症状・所見", "処置", "投薬"].map(t => h("th", { key: t, style: Object.assign({}, th, { textAlign: "left" }) }, t)))),
+          h("tbody", null, visits.map((v, i) => h("tr", { key: i, style: { verticalAlign: "top" } },
+            h("td", { style: Object.assign({}, td, { textAlign: "left" }) }, (v.date || "").slice(5).replace("-", "/"), v.visitType ? h("div", { style: { fontSize: 10, color: "#6b7280" } }, v.visitType) : null),
+            h("td", { style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) },
+              (v.symptoms || []).join("、"),
+              v.history ? h("div", { style: { color: "#374151" } }, v.history) : null,
+              v.clinicalExam ? h("div", { style: { color: "#374151" } }, v.clinicalExam) : null,
+              labsSummary(v.labs) ? h("div", { style: { color: "#b91c1c", fontSize: 11 } }, "🩸 ", labsSummary(v.labs)) : null),
+            h("td", { style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) }, (v.treatments || []).map(t => t.name).join("、")),
+            h("td", { style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) }, (v.drugs || []).map(drugName).join("、")))))),
+        photoDates.length > 0 && h("div", null,
+          sec("写真"),
+          photoDates.map(d => h("div", { key: d, style: { marginBottom: 10, breakInside: "avoid" } },
+            h("div", { style: { fontSize: 12, color: "#374151", marginBottom: 4 } }, d.slice(5).replace("-", "/")),
+            h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, byDate[d].map(p => h("img", { key: p._id, src: p.img, style: { width: 220, height: 165, objectFit: "cover", borderRadius: 4, border: p.kind === "血液検査" ? "2px solid #dc2626" : "1px solid #d1d5db" } })))))))));
+}
 function GeneralKartePage({
   kase,
   horses,
@@ -4499,6 +4593,7 @@ function GeneralKartePage({
   const [adjustFee, setAdjustFee] = useState(0);
   const [memo, setMemo] = useState("");
   const [labs, setLabs] = useState({});   // 2026-11-21 血液検査
+  const [showSummary, setShowSummary] = useState(false);   // 2026-11-21 経過まとめ
   const [casePhotos, photoErr] = useCasePhotos(kase ? kase.id : null);
   const horse = horses.find(h => h.id === Number(selectedHorse));
   const farm = horse ? farms.find(f => f.id === horse.farmId) : null;
@@ -4808,7 +4903,7 @@ function GeneralKartePage({
       padding: "8px 16px",
       fontSize: 14
     }
-  }, "\u30AD\u30E3\u30F3\u30BB\u30EB"), !isNew && onDelete && /*#__PURE__*/React.createElement("button", {
+  }, "\u30AD\u30E3\u30F3\u30BB\u30EB"), !isNew && pastVisits.length > 0 && React.createElement("button", { className: "btn btn-secondary", onClick: () => setShowSummary(true), style: { padding: "8px 14px", fontSize: 14, borderColor: "#0f766e", color: "#0f766e", background: "#f0fdfa" } }, "📈 経過まとめ"), !isNew && onDelete && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-sm",
     onClick: () => {
       onDelete(kase.id);
@@ -5545,7 +5640,7 @@ function GeneralKartePage({
       maxHeight: "calc(100vh - 40px)",
       overflowY: "auto"
     }
-  }, React.createElement(LabTrendPanel, { visits: pastVisits }), pastVisitsPanel, horseDiseaseHistory));
+  }, React.createElement(LabTrendPanel, { visits: pastVisits }), pastVisitsPanel, horseDiseaseHistory), showSummary && kase && React.createElement(CaseSummary, { kase: kase, horse: horse, farm: farm, drugsMaster: drugsMaster, photos: casePhotos, onClose: () => setShowSummary(false) }));
 }
 
 // ═══════════════ ERROR BOUNDARY ═══════════════
