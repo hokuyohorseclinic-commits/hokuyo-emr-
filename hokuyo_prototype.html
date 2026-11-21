@@ -4229,6 +4229,167 @@ function DiagnosisInput({value, onChange, cases}) {
 }
 
 // ═══════════════ GENERAL KARTE INPUT ═══════════════
+// ═══════════════ 2026-11-21 院長指示: 一般カルテに写真・血液検査 ═══════════════
+// 写真は Firestore の photos コレクションに1枚＝1文書で保存（カルテ本体の同期データとは別。Blaze不要・オフライン時は端末に溜めて復帰後に送信）
+// 血液検査の数値は来院行の labs に保存（写真から数値への読み取りは院長の依頼で Claude が行い、院長確認後に入力）
+var LAB_ITEMS = [
+  { k: "WBC", u: "/μL" }, { k: "RBC", u: "万/μL" }, { k: "Hb", u: "g/dL" }, { k: "PCV", u: "%" }, { k: "PLT", u: "万/μL" },
+  { k: "TP", u: "g/dL" }, { k: "Alb", u: "g/dL" }, { k: "Fib", u: "mg/dL" }, { k: "SAA", u: "μg/mL" },
+  { k: "BUN", u: "mg/dL" }, { k: "Cre", u: "mg/dL" }, { k: "AST", u: "U/L" }, { k: "GGT", u: "U/L" }, { k: "CK", u: "U/L" },
+  { k: "Glu", u: "mg/dL" }, { k: "Lac", u: "mmol/L" }
+];
+function cleanLabs(l) {
+  var o = {}; if (!l) return o;
+  Object.keys(l).forEach(function (k) { var v = l[k]; if (v !== undefined && v !== null && String(v).trim() !== "") o[k] = String(v).trim(); });
+  return o;
+}
+function labsSummary(l) {
+  l = cleanLabs(l); var ks = LAB_ITEMS.map(function (x) { return x.k; }).filter(function (k) { return l[k]; });
+  var s = ks.map(function (k) { return k + " " + l[k]; }).join(" / ");
+  if (l.other) s += (s ? " / " : "") + l.other;
+  return s;
+}
+function compressPhoto(file, maxSide, quality) {
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file); var img = new Image();
+    img.onload = function () {
+      try {
+        var side = maxSide, q = quality, out = null, w = 0, hgt = 0;
+        for (var tries = 0; tries < 8; tries++) {
+          var r = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight));
+          w = Math.round(img.naturalWidth * r); hgt = Math.round(img.naturalHeight * r);
+          var c = document.createElement("canvas"); c.width = w; c.height = hgt;
+          c.getContext("2d").drawImage(img, 0, 0, w, hgt);
+          out = c.toDataURL("image/jpeg", q);
+          if (out.length < 850000) break;           // Firestore 1文書 1MB 未満に収める
+          if (q > 0.55) q -= 0.1; else side = Math.round(side * 0.8);
+        }
+        URL.revokeObjectURL(url); resolve({ dataUrl: out, w: w, h: hgt });
+      } catch (e) { URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("画像を読み込めませんでした")); };
+    img.src = url;
+  });
+}
+function useCasePhotos(caseId) {
+  const [list, setList] = useState([]);
+  const [err, setErr] = useState("");
+  useEffect(function () {
+    setList([]); setErr("");
+    if (!caseId || typeof firebaseDB === "undefined" || !firebaseDB) return;
+    var unsub = firebaseDB.collection("photos").where("caseId", "==", caseId).onSnapshot({ includeMetadataChanges: true }, function (snap) {
+      var a = []; snap.forEach(function (d) { var x = d.data(); x._id = d.id; x._pending = d.metadata.hasPendingWrites; a.push(x); });
+      a.sort(function (p, q) { return (p.date || "").localeCompare(q.date || "") || (p.createdAt || "").localeCompare(q.createdAt || ""); });
+      setList(a); setErr("");
+    }, function (e) { setErr(String(e && (e.code || e.message) || e)); });
+    return function () { try { unsub(); } catch (e) {} };
+  }, [caseId]);
+  return [list, err];
+}
+function LabInputBlock({ labs, setLabs }) {
+  const filled = Object.keys(cleanLabs(labs)).length;
+  const [open, setOpen] = useState(filled > 0);
+  useEffect(function () { if (Object.keys(cleanLabs(labs)).length > 0) setOpen(true); }, [labs]);
+  const h = React.createElement;
+  const set = function (k, v) { setLabs(function (p) { var n = Object.assign({}, p || {}); n[k] = v; return n; }); };
+  return h("div", { style: { marginTop: 10, border: "1px solid #fecaca", borderRadius: 8, background: "#fff7f7" } },
+    h("div", { onClick: function () { setOpen(!open); }, style: { padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#b91c1c", display: "flex", justifyContent: "space-between" } },
+      h("span", null, "🩸 血液検査（この診療）", filled ? "　" + filled + "項目" : ""), h("span", null, open ? "▲" : "▼")),
+    open && h("div", { style: { padding: "4px 10px 10px" } },
+      h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 6 } },
+        LAB_ITEMS.map(function (it) {
+          return h("label", { key: it.k, style: { fontSize: 10, color: "#6b7280" } }, it.k,
+            h("input", { className: "inp-sm", inputMode: "decimal", value: (labs && labs[it.k]) || "", placeholder: it.u,
+              onChange: function (e) { set(it.k, e.target.value); }, style: { width: "100%", fontSize: 13 } }));
+        })),
+      h("input", { className: "inp-sm", value: (labs && labs.other) || "", placeholder: "その他（例：Ca 11.2、Na 138）",
+        onChange: function (e) { set("other", e.target.value); }, style: { width: "100%", marginTop: 6, fontSize: 12 } }),
+      h("p", { style: { fontSize: 10, color: "#9ca3af", margin: "4px 0 0" } }, "「診療保存」でこの来院行に保存されます。")));
+}
+function PhotoViewer({ photo, onClose }) {
+  const h = React.createElement;
+  if (!photo) return null;
+  const del = function () {
+    if (!confirm("この写真を削除しますか？\n※削除すると元に戻せません")) return;
+    firebaseDB.collection("photos").doc(photo._id).delete().then(function () { showToast("写真を削除しました"); }).catch(function (e) { alert("削除できませんでした: " + (e.code || e.message)); });
+    onClose();
+  };
+  return h("div", { onClick: onClose, style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 12 } },
+    h("img", { src: photo.img, style: { maxWidth: "100%", maxHeight: "82vh", objectFit: "contain", borderRadius: 4 } }),
+    h("div", { onClick: function (e) { e.stopPropagation(); }, style: { color: "#fff", fontSize: 13, marginTop: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", justifyContent: "center" } },
+      h("span", null, (photo.kind === "血液検査" ? "🩸 血液検査" : "📷 写真") + "　" + (photo.date || "") + (photo.vet ? "　" + photo.vet : "")),
+      h("a", { href: photo.img, download: (photo.date || "photo") + ".jpg", style: { color: "#93c5fd" } }, "保存"),
+      h("button", { onClick: del, style: { background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer" } }, "削除"),
+      h("button", { onClick: onClose, style: { background: "#fff", color: "#111", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer" } }, "閉じる")));
+}
+function CasePhotosBlock({ kase, photos, photoErr, visitDate, vet, visits }) {
+  const h = React.createElement;
+  const [busy, setBusy] = useState(0);
+  const [view, setView] = useState(null);
+  if (!kase || !kase.id) return h("div", { style: { marginTop: 10, fontSize: 11, color: "#9ca3af" } }, "📷 写真・血液検査の写真は、カルテ作成後に追加できます。");
+  const add = function (kind, files) {
+    files = Array.prototype.slice.call(files || []); if (!files.length) return;
+    if (!firebaseDB) { alert("クラウドに接続していないため写真を保存できません"); return; }
+    setBusy(function (b) { return b + files.length; });
+    files.forEach(function (f) {
+      compressPhoto(f, 1600, 0.8).then(function (big) {
+        return compressPhoto(f, 240, 0.7).then(function (th) {
+          var doc = { caseId: kase.id, horseId: kase.horseId || null, farmId: kase.farmId || null, date: visitDate || todayJST(), kind: kind,
+            img: big.dataUrl, thumb: th.dataUrl, w: big.w, h: big.h, vet: vet || "", createdAt: new Date().toISOString(), by: (typeof _deviceId !== "undefined" ? _deviceId : "") };
+          var p = firebaseDB.collection("photos").add(doc);
+          // オフラインでも端末に保存された時点で表示される。送信完了は後から
+          p.catch(function (e) { alert("写真を保存できませんでした: " + (e.code || e.message) + (String(e.code).indexOf("permission") >= 0 ? "\nFirestoreのルールで photos の書き込みが許可されていない可能性があります" : "")); });
+        });
+      }).catch(function (e) { alert(e.message || String(e)); })
+        .then(function () { setBusy(function (b) { return Math.max(0, b - 1); }); });
+    });
+  };
+  const btn = function (kind, label, color) {
+    return h("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 8, border: "1px solid " + color, color: color, background: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" } },
+      label, h("input", { type: "file", accept: "image/*", multiple: true, style: { display: "none" }, onChange: function (e) { add(kind, e.target.files); e.target.value = ""; } }));
+  };
+  const labDates = {}; (visits || []).forEach(function (v) { if (Object.keys(cleanLabs(v.labs)).length) labDates[v.date] = 1; });
+  const byDate = {}; photos.forEach(function (p) { (byDate[p.date || ""] = byDate[p.date || ""] || []).push(p); });
+  const dates = Object.keys(byDate).sort().reverse();
+  return h("div", { style: { marginTop: 10, border: "1px solid #bfdbfe", borderRadius: 8, padding: 10, background: "#f8fbff" } },
+    h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+      h("strong", { style: { fontSize: 12, color: "#1e40af" } }, "📷 写真（", photos.length, "枚）"),
+      btn("写真", "📷 写真を追加", "#2563eb"), btn("血液検査", "🩸 血液検査を撮る", "#dc2626"),
+      busy > 0 && h("span", { style: { fontSize: 11, color: "#6b7280" } }, "保存中… ", busy, "枚"),
+      h("span", { style: { fontSize: 10, color: "#9ca3af" } }, "日付：", visitDate || todayJST())),
+    photoErr && h("p", { style: { fontSize: 11, color: "#dc2626", margin: "6px 0 0" } }, "写真を読み込めません（", photoErr, "）"),
+    dates.map(function (d) {
+      return h("div", { key: d, style: { marginTop: 8 } },
+        h("div", { style: { fontSize: 11, color: "#6b7280", marginBottom: 3 } }, d),
+        h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, byDate[d].map(function (p) {
+          var needLab = p.kind === "血液検査" && !labDates[p.date];
+          return h("div", { key: p._id, onClick: function () { setView(p); }, style: { position: "relative", cursor: "pointer" } },
+            h("img", { src: p.thumb || p.img, style: { width: 72, height: 72, objectFit: "cover", borderRadius: 6, border: p.kind === "血液検査" ? "2px solid #dc2626" : "1px solid #d1d5db", opacity: p._pending ? 0.6 : 1 } }),
+            p.kind === "血液検査" && h("span", { style: { position: "absolute", left: 2, top: 2, fontSize: 10, background: "#dc2626", color: "#fff", borderRadius: 4, padding: "0 3px" } }, "🩸"),
+            needLab && h("span", { style: { position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 9, background: "rgba(220,38,38,0.85)", color: "#fff", textAlign: "center", borderRadius: "0 0 6px 6px" } }, "数値未入力"),
+            p._pending && h("span", { style: { position: "absolute", right: 2, top: 2, fontSize: 9, background: "#f59e0b", color: "#fff", borderRadius: 4, padding: "0 3px" } }, "未送信"));
+        })));
+    }),
+    h(PhotoViewer, { photo: view, onClose: function () { setView(null); } }));
+}
+function LabTrendPanel({ visits }) {
+  const h = React.createElement;
+  const vs = (visits || []).filter(function (v) { return Object.keys(cleanLabs(v.labs)).length; }).slice().sort(function (a, b) { return (a.date || "").localeCompare(b.date || ""); });
+  if (!vs.length) return null;
+  const keys = LAB_ITEMS.map(function (x) { return x.k; }).filter(function (k) { return vs.some(function (v) { return cleanLabs(v.labs)[k]; }); });
+  const hasOther = vs.some(function (v) { return cleanLabs(v.labs).other; });
+  const td = { padding: "2px 6px", borderBottom: "1px solid #f3f4f6", textAlign: "right", whiteSpace: "nowrap" };
+  return h("div", { style: { marginBottom: 16 } },
+    h("h3", { style: { fontSize: 13, fontWeight: 700, marginBottom: 6, color: "#b91c1c" } }, "🩸 血液検査の推移"),
+    h("div", { style: { overflowX: "auto" } }, h("table", { style: { fontSize: 11, borderCollapse: "collapse" } },
+      h("thead", null, h("tr", null, h("th", { style: Object.assign({}, td, { textAlign: "left" }) }, ""), vs.map(function (v, i) { return h("th", { key: i, style: td }, (v.date || "").slice(5)); }))),
+      h("tbody", null, keys.map(function (k) {
+        var u = (LAB_ITEMS.find(function (x) { return x.k === k; }) || {}).u;
+        return h("tr", { key: k }, h("td", { style: Object.assign({}, td, { textAlign: "left", fontWeight: 600 }) }, k, h("span", { style: { color: "#9ca3af", fontWeight: 400, fontSize: 9 } }, " ", u)),
+          vs.map(function (v, i) { return h("td", { key: i, style: td }, cleanLabs(v.labs)[k] || ""); }));
+      }), hasOther && h("tr", null, h("td", { style: Object.assign({}, td, { textAlign: "left", fontWeight: 600 }) }, "その他"), vs.map(function (v, i) { return h("td", { key: i, style: Object.assign({}, td, { textAlign: "left", whiteSpace: "normal" }) }, cleanLabs(v.labs).other || ""); }))))));
+}
+
 function GeneralKartePage({
   kase,
   horses,
@@ -4286,6 +4447,7 @@ function GeneralKartePage({
     setVehicleKm(v.vehicleKm ? String(v.vehicleKm) : "");
     setAdjustFee(v.adjustFee || 0);
     setMemo(v.memo || "");
+    setLabs(v.labs || {});
   };
   const cancelEdit = () => {
     setEditVisitIdx(-1);
@@ -4301,6 +4463,7 @@ function GeneralKartePage({
     setVehicleKm("");
     setAdjustFee(0);
     setMemo("");
+    setLabs({});
   };
   const [symptoms, setSymptoms] = useState([]);
   const [vitals, setVitals] = useState({
@@ -4320,6 +4483,8 @@ function GeneralKartePage({
   const [vehicleKm, setVehicleKm] = useState("");
   const [adjustFee, setAdjustFee] = useState(0);
   const [memo, setMemo] = useState("");
+  const [labs, setLabs] = useState({});   // 2026-11-21 血液検査
+  const [casePhotos, photoErr] = useCasePhotos(kase ? kase.id : null);
   const horse = horses.find(h => h.id === Number(selectedHorse));
   const farm = horse ? farms.find(f => f.id === horse.farmId) : null;
   const toggleSymptom = s => setSymptoms(p => p.includes(s) ? p.filter(x => x !== s) : [...p, s]);
@@ -4349,7 +4514,7 @@ function GeneralKartePage({
   const handleCreateKarte = () => {
     if (!selectedHorse) { alert("\u99AC\u540D\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044"); return; }
     if (!diagnosis) { alert("\u75C5\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044"); return; }
-    const hasTreatData = selTreatments.length > 0 || drugRows.some(r => r.drugId) || symptoms.length > 0 || vitals.t || vitals.p || vitals.r || history || clinicalExam || vehicleKm;
+    const hasTreatData = Object.keys(cleanLabs(labs)).length > 0 || selTreatments.length > 0 || drugRows.some(r => r.drugId) || symptoms.length > 0 || vitals.t || vitals.p || vitals.r || history || clinicalExam || vehicleKm;
     const firstVisit = hasTreatData ? [{
       date: visitDate,
       vet: visitVet || currentVet || "佐藤",
@@ -4363,7 +4528,8 @@ function GeneralKartePage({
       drugs: drugRows.filter(r => r.drugId).map(r => { const dd = drugsMaster.find(x => x.id === Number(r.drugId)); return { drugId: Number(r.drugId), dose: Number(r.dose) || 0, memo: r.memo, useRx: r.useRx || false, fee: calcDrugLine(dd, r.dose, r.useRx), unitPrice: drugUnitPrice(dd, r.useRx), unit: r.useRx && dd ? (dd.packUnit || dd.unit) : (dd ? dd.unit : "") }; }),
       vehicleKm: Number(vehicleKm) || 0,
       adjustFee: Number(adjustFee) || 0,
-      memo
+      memo,
+      labs: cleanLabs(labs)
     }] : [];
     showToast("✓ カルテを作成しました　" + (horse ? horse.name : "") + "　" + diagnosis + (hasTreatData ? "　¥" + currentTotal.toLocaleString() : ""));
     onSave({
@@ -4406,7 +4572,8 @@ function GeneralKartePage({
       }; }),
       vehicleKm: Number(vehicleKm) || 0,
       adjustFee: Number(adjustFee) || 0,
-      memo
+      memo,
+      labs: cleanLabs(labs)
     };
     let updatedVisits;
     if (editVisitIdx >= 0) {
@@ -4442,6 +4609,7 @@ function GeneralKartePage({
     setVehicleKm("");
     setAdjustFee(0);
     setMemo("");
+    setLabs({});
   };
   // コピー機能: 過去の診療行の処置・投薬を現在の入力に貼り付け
   const copyVisit = (v, quiet) => {
@@ -4453,7 +4621,7 @@ function GeneralKartePage({
   };
   // 「前回と同じ」: 直近の診療行を読み込む（再診扱い）
   const lastVisitForCopy = pastVisits.length > 0 ? pastVisits.reduce((mx, v) => (!mx || (v.date || "") >= (mx.date || "")) ? v : mx, null) : null;
-  const formIsEmpty = selTreatments.length === 0 && !drugRows.some(r => r.drugId) && !vehicleKm && !memo;
+  const formIsEmpty = selTreatments.length === 0 && !drugRows.some(r => r.drugId) && !vehicleKm && !memo && !Object.keys(cleanLabs(labs)).length;
   // 削除機能: 診療履歴の行を削除
   const deleteVisit = (idx) => {
     if (!kase) return;
@@ -4496,7 +4664,9 @@ function GeneralKartePage({
         const d = drugsMaster.find(x => x.id === r.drugId);
         return d ? d.name : "";
       }).filter(Boolean).join("\u3001") : ""
-    ), /*#__PURE__*/React.createElement("div", {
+    ), labsSummary(v.labs) && React.createElement("div", {style:{color:"#b91c1c", marginBottom:2}}, "🩸 ", labsSummary(v.labs)),
+    (function(){ var n = casePhotos.filter(function(p){ return p.date === v.date; }).length; return n ? React.createElement("div", {style:{color:"#2563eb", marginBottom:2}}, "📷 ", n, "枚") : null; })(),
+    /*#__PURE__*/React.createElement("div", {
       style: {display:"flex", gap:4, marginTop:4}
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => copyVisit(v),
@@ -5366,14 +5536,14 @@ function GeneralKartePage({
       resize: "vertical",
       fontSize: 11
     }
-  })))))), /*#__PURE__*/React.createElement("div", {
+  }), React.createElement(LabInputBlock, { labs: labs, setLabs: setLabs }), React.createElement(CasePhotosBlock, { kase: kase, photos: casePhotos, photoErr: photoErr, visitDate: visitDate, vet: visitVet || currentVet, visits: pastVisits })))))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "sticky",
       top: 16,
       maxHeight: "calc(100vh - 40px)",
       overflowY: "auto"
     }
-  }, pastVisitsPanel, horseDiseaseHistory));
+  }, React.createElement(LabTrendPanel, { visits: pastVisits }), pastVisitsPanel, horseDiseaseHistory));
 }
 
 // ═══════════════ ERROR BOUNDARY ═══════════════
