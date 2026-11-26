@@ -1835,63 +1835,117 @@ function envTate(s) {
   return String(s || "").replace(/\d/g, d => k[+d]).replace(/-/g, "ー");
 }
 function envEsc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-function printEnvelopes(list) {
+function envItem(f) {
+  const zip = String(f.zip || zipFromAddress(f.address) || "").replace(/\D/g, "");
+  const addr = envAddressText(f.address);
+  return { name: f.name || "", zip, addrH: addr, addrV: envTate(addr), noAddr: !f.address };
+}
+// 2026-11-26 院長指示: 封筒は横書きが基本。請求のないクライアントにも出せるよう、印刷画面で牧場を追加・手入力できる
+function envChild(D) {
+  var K = "hokuyo_env_cfg", c = {};
+  try { c = JSON.parse(localStorage.getItem(K) || "{}"); } catch (e) {}
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+  var n = 0;
+  function fit() {
+    document.querySelectorAll(".name").forEach(function (el) {
+      el.style.fontSize = "";
+      if (document.body.classList.contains("tate")) return;
+      var fs = 22;
+      while (el.scrollWidth > el.clientWidth + 1 && fs > 12) { fs -= 1; el.style.fontSize = fs + "pt"; }
+    });
+  }
+  function add(it) {
+    var i = n++;
+    var z = it.zip || "";
+    var digits = z.split("").map(function (d, j) { return '<span class="zd zd' + j + '">' + d + "</span>"; }).join("");
+    var pg = document.createElement("div");
+    pg.className = "env"; pg.dataset.i = i;
+    pg.innerHTML = '<div class="inner">' +
+      '<div class="zipbox" contenteditable="true">' + digits + "</div>" +
+      '<div class="ziptxt" contenteditable="true">〒' + (z ? z.slice(0, 3) + "-" + z.slice(3) : "") + "</div>" +
+      '<div class="addrh" contenteditable="true">' + esc(it.addrH || "（住所）") + "</div>" +
+      '<div class="addrv" contenteditable="true">' + esc(it.addrV || "（住所）") + "</div>" +
+      '<div class="name" contenteditable="true">' + esc(it.name || "（宛名）") + '<span class="sama">　様</span></div>' +
+      '<div class="zaichu">請求書在中</div></div>';
+    $("pages").appendChild(pg);
+    var warn = it.noAddr ? '<b style="color:#dc2626">住所なし</b>' : !z ? '<b style="color:#d97706">〒不明</b>' : z.slice(0, 3) + "-" + z.slice(3);
+    var lb = document.createElement("label");
+    lb.className = "pick";
+    lb.innerHTML = '<input type="checkbox" checked> ' + esc(it.name || "手入力") + ' <span style="color:#6b7280">（' + warn + "）</span>";
+    lb.firstChild.onchange = function () { pg.classList.toggle("off", !this.checked); cnt(); };
+    $("picks").appendChild(lb);
+    cnt(); fit();
+  }
+  function cnt() { $("cnt").textContent = document.querySelectorAll(".env:not(.off)").length + "枚"; }
+  function ap() {
+    document.body.classList.toggle("boxmode", !!c.box);
+    document.body.classList.toggle("nozai", !!c.nozai);
+    document.body.classList.toggle("tate", !!c.tate);
+    document.querySelectorAll(".inner").forEach(function (el) { el.style.transform = "translate(" + (+c.dx || 0) + "mm," + (+c.dy || 0) + "mm)"; });
+    $("box").checked = !!c.box; $("zai").checked = !c.nozai; $("tate").checked = !!c.tate; $("dx").value = c.dx || 0; $("dy").value = c.dy || 0;
+    try { localStorage.setItem(K, JSON.stringify(c)); } catch (e) {}
+    fit();
+  }
+  $("box").onchange = function () { c.box = this.checked; ap(); };
+  $("zai").onchange = function () { c.nozai = !this.checked; ap(); };
+  $("tate").onchange = function () { c.tate = this.checked; ap(); };
+  $("dx").oninput = function () { c.dx = this.value; ap(); };
+  $("dy").oninput = function () { c.dy = this.value; ap(); };
+  $("dl").innerHTML = D.all.map(function (f) { return '<option value="' + esc(f.name) + '">'; }).join("");
+  $("addBtn").onclick = function () {
+    var v = $("q").value.trim(); if (!v) return;
+    var f = D.all.filter(function (x) { return x.name === v; })[0] || D.all.filter(function (x) { return x.name.indexOf(v) >= 0; })[0];
+    if (!f) { alert("「" + v + "」が牧場マスターに見つかりません。手入力で追加してください"); return; }
+    add(f); ap(); $("q").value = ""; window.scrollTo(0, document.body.scrollHeight);
+  };
+  $("q").onkeydown = function (e) { if (e.key === "Enter") $("addBtn").click(); };
+  $("manBtn").onclick = function () { add({ name: "", zip: "", addrH: "", addrV: "" }); ap(); window.scrollTo(0, document.body.scrollHeight); };
+  D.items.forEach(add);
+  ap();
+}
+function printEnvelopes(list, allFarms) {
   list = (list || []).filter(f => f && f.name);
-  if (!list.length) return alert("封筒を印刷する牧場がありません");
   const w = window.open("", "_blank", "width=900,height=1000");
   if (!w) return alert("ポップアップがブロックされました。許可してからもう一度押してください");
-  const pages = list.map((f, i) => {
-    const zip = (f.zip || zipFromAddress(f.address)).replace(/\D/g, "");
-    const digits = zip.split("").map((d, j) => '<span class="zd zd' + j + '">' + d + "</span>").join("");
-    return '<div class="env" data-i="' + i + '"><div class="inner">' +
-      '<div class="zipbox" contenteditable="true" data-zip="' + zip + '">' + digits + "</div>" +
-      '<div class="ziptxt" contenteditable="true">' + (zip ? "〒" + zip.slice(0, 3) + "-" + zip.slice(3) : "〒") + "</div>" +
-      '<div class="addr" contenteditable="true">' + envEsc(envTate(envAddressText(f.address))) + "</div>" +
-      '<div class="name" contenteditable="true">' + envEsc(f.name) + '<span class="sama">様</span></div>' +
-      '<div class="zaichu">請求書在中</div>' +
-      "</div></div>";
-  }).join("");
-  const rows = list.map((f, i) => {
-    const zip = f.zip || zipFromAddress(f.address);
-    const warn = !f.address ? '<b style="color:#dc2626">住所なし</b>' : !zip ? '<b style="color:#d97706">〒不明</b>' : zip;
-    return '<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;font-size:12px;white-space:nowrap"><input type="checkbox" checked data-pick="' + i + '">' + envEsc(f.name) + '<span style="color:#6b7280">（' + warn + "）</span></label>";
-  }).join("");
+  const all = (allFarms || []).filter(f => f && f.name && !f.archived).map(envItem);
+  const D = { items: list.map(envItem), all };
   const css = '@page{size:120mm 235mm;margin:0}*{box-sizing:border-box}body{margin:0;font-family:"Hiragino Mincho ProN","Yu Mincho","MS Mincho",serif;background:#e5e7eb}' +
     ".bar{position:sticky;top:0;z-index:9;background:#fff;border-bottom:1px solid #d1d5db;padding:10px 14px;font-family:sans-serif;font-size:13px}" +
-    ".bar button{padding:8px 22px;font-size:14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700}" +
-    ".bar input[type=number]{width:52px}" +
+    ".bar button{padding:7px 16px;font-size:13px;background:#e5e7eb;color:#111;border:none;border-radius:6px;cursor:pointer;font-weight:600}" +
+    ".bar button.pr{padding:8px 22px;font-size:14px;background:#2563eb;color:#fff;font-weight:700}" +
+    ".bar input[type=number]{width:52px}.pick{display:inline-flex;align-items:center;gap:4px;margin:2px 12px 2px 0;font-size:12px;white-space:nowrap}" +
     ".env{width:120mm;height:235mm;background:#fff;margin:12px auto;position:relative;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.25)}" +
-    ".inner{position:absolute;inset:0}" +
-    ".zipbox{position:absolute;top:12mm;left:64.3mm;width:48mm;height:8mm;outline:none}" +
+    ".inner{position:absolute;inset:0}[contenteditable]{outline:none}" +
+    ".zipbox{position:absolute;top:12mm;left:64.3mm;width:48mm;height:8mm}" +
     ".zd{position:absolute;top:0;width:5.7mm;height:8mm;line-height:8mm;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15pt}" +
     ".zd0{left:0}.zd1{left:7mm}.zd2{left:14mm}.zd3{left:21.9mm;width:5.4mm}.zd4{left:28.7mm;width:5.4mm}.zd5{left:35.5mm;width:5.4mm}.zd6{left:42.3mm;width:5.4mm}" +
-    ".ziptxt{position:absolute;top:11mm;right:10mm;font-family:Arial,Helvetica,sans-serif;font-size:15pt;letter-spacing:1px;outline:none}" +
     "body.boxmode .ziptxt{display:none}body:not(.boxmode) .zipbox{display:none}" +
-    ".addr{position:absolute;top:30mm;right:13mm;height:180mm;writing-mode:vertical-rl;font-size:14pt;line-height:1.7;letter-spacing:1px;outline:none}" +
-    ".name{position:absolute;top:42mm;left:50%;transform:translateX(-50%);height:175mm;writing-mode:vertical-rl;font-size:26pt;font-weight:700;letter-spacing:4px;line-height:1.3;outline:none}" +
-    ".sama{margin-top:10mm;display:inline-block}" +
-    ".zaichu{position:absolute;left:13mm;bottom:22mm;writing-mode:vertical-rl;color:#dc2626;border:1.5px solid #dc2626;padding:3mm 1.5mm;font-size:12pt;letter-spacing:3px;font-weight:700}" +
+    /* 横書き（標準） */
+    ".ziptxt{position:absolute;top:28mm;left:16mm;font-family:Arial,Helvetica,sans-serif;font-size:14pt;letter-spacing:1px}" +
+    ".addrh{position:absolute;top:38mm;left:16mm;right:12mm;font-size:13pt;line-height:1.6}" +
+    ".addrv{display:none}" +
+    ".name{position:absolute;top:95mm;left:10mm;right:10mm;text-align:center;white-space:nowrap;font-size:22pt;font-weight:700;letter-spacing:2px}" +
+    ".zaichu{position:absolute;left:16mm;bottom:28mm;color:#dc2626;border:1.5px solid #dc2626;padding:1.5mm 3mm;font-size:12pt;letter-spacing:3px;font-weight:700}" +
+    /* 縦書き */
+    "body.tate .ziptxt{top:11mm;left:auto;right:10mm;font-size:15pt}" +
+    "body.tate .addrh{display:none}" +
+    "body.tate .addrv{display:block;position:absolute;top:30mm;right:13mm;height:180mm;writing-mode:vertical-rl;font-size:14pt;line-height:1.7;letter-spacing:1px}" +
+    "body.tate .name{top:42mm;left:50%;right:auto;transform:translateX(-50%);height:175mm;writing-mode:vertical-rl;text-align:start;white-space:normal;font-size:26pt;letter-spacing:4px;line-height:1.3}" +
+    "body.tate .zaichu{left:13mm;bottom:22mm;writing-mode:vertical-rl;padding:3mm 1.5mm}" +
     "body.nozai .zaichu{display:none}.env.off{display:none}" +
     "@media print{body{background:#fff}.bar{display:none}.env{margin:0;box-shadow:none;page-break-after:always}}";
-  const script = "(function(){var K='hokuyo_env_cfg';var c={};try{c=JSON.parse(localStorage.getItem(K)||'{}')}catch(e){}" +
-    "var $=function(id){return document.getElementById(id)};" +
-    "function ap(){document.body.classList.toggle('boxmode',!!c.box);document.body.classList.toggle('nozai',!!c.nozai);" +
-    "document.querySelectorAll('.inner').forEach(function(el){el.style.transform='translate('+(+c.dx||0)+'mm,'+(+c.dy||0)+'mm)'});" +
-    "$('box').checked=!!c.box;$('zai').checked=!c.nozai;$('dx').value=c.dx||0;$('dy').value=c.dy||0;" +
-    "try{localStorage.setItem(K,JSON.stringify(c))}catch(e){}}" +
-    "$('box').onchange=function(){c.box=this.checked;ap()};$('zai').onchange=function(){c.nozai=!this.checked;ap()};" +
-    "$('dx').oninput=function(){c.dx=this.value;ap()};$('dy').oninput=function(){c.dy=this.value;ap()};" +
-    "function cnt(){var n=document.querySelectorAll('.env:not(.off)').length;$('cnt').textContent=n+'枚'}" +
-    "document.querySelectorAll('[data-pick]').forEach(function(cb){cb.onchange=function(){document.querySelector('.env[data-i=\"'+cb.dataset.pick+'\"]').classList.toggle('off',!cb.checked);cnt()}});" +
-    "ap();cnt()})();";
   w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>封筒印刷（長3）</title><style>' + css + "</style></head><body>" +
-    '<div class="bar"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><button onclick="window.print()">🖨 封筒を印刷</button><b id="cnt"></b>' +
+    '<div class="bar"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><button class="pr" onclick="window.print()">🖨 封筒を印刷</button><b id="cnt"></b>' +
     '<label><input type="checkbox" id="zai"> 請求書在中</label>' +
+    '<label><input type="checkbox" id="tate"> 縦書き</label>' +
     '<label title="封筒の表に赤い郵便番号の枠がある場合はチェック"><input type="checkbox" id="box"> 郵便番号の枠に合わせる</label>' +
     '<span>位置の調整 横 <input type="number" id="dx" step="0.5"> mm　縦 <input type="number" id="dy" step="0.5"> mm</span></div>' +
-    '<div style="margin-top:6px;color:#374151">印刷の設定で用紙サイズを「長形3号（120×235mm）」、余白を「なし」にしてください。文字は印刷前にクリックして直せます。チェックを外した牧場は印刷されません。</div>' +
-    '<div style="margin-top:6px;max-height:90px;overflow:auto">' + rows + "</div></div>" +
-    pages + "<script>" + script + "<\/script></body></html>");
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><b>宛先を追加：</b><input id="q" list="dl" placeholder="牧場名で選ぶ" style="padding:5px 8px;width:240px"><datalist id="dl"></datalist><button id="addBtn">＋ 追加</button><button id="manBtn">＋ 手入力で1枚</button>' +
+    '<span style="color:#6b7280">請求のないクライアントもここから追加できます。請求書以外を送るときは「請求書在中」を外してください。</span></div>' +
+    '<div style="margin-top:6px;color:#374151">印刷の設定で用紙サイズを「長形3号（120×235mm）」、余白を「なし」にしてください。文字はクリックして直せます。チェックを外した宛先は印刷されません。</div>' +
+    '<div id="picks" style="margin-top:6px;max-height:80px;overflow:auto"></div></div><div id="pages"></div>' +
+    "<script>(" + envChild.toString() + ")(" + JSON.stringify(D).replace(/</g, "\\x3c") + ");<\/script></body></html>");
   w.document.close();
 }
 
@@ -8545,7 +8599,7 @@ function BillingPage({
     }, "\uD83E\uDDFE \u9818\u53CE\u66F8"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-sm",
       style: { background: "#0e7490", color: "#fff" },
-      onClick: () => printEnvelopes([fb.farm])
+      onClick: () => printEnvelopes([fb.farm], farms)
     }, "\u2709 \u5c01\u7b52"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-secondary btn-sm",
       onClick: () => setShowPayForm(fb.farm.id)
@@ -8904,7 +8958,7 @@ function BillingPage({
         className: "btn btn-sm",
         style: { background: "#0e7490", color: "#fff", fontWeight: 700, padding: "6px 16px" },
         title: "請求がある牧場の宛名を長3封筒に印刷",
-        onClick: () => printEnvelopes(filteredBilling.filter(fb => (fb.total || 0) > 0 || (fb.nextCarryover || 0) > 0).map(fb => fb.farm))
+        onClick: () => printEnvelopes(filteredBilling.filter(fb => (fb.total || 0) > 0 || (fb.nextCarryover || 0) > 0).map(fb => fb.farm), farms)
       }, "✉ 封筒（長3）"),
       React.createElement("button", {
         className: "btn btn-sm",
@@ -9590,6 +9644,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
   const farmsTabContent = tab === "farms" ? /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("div", {style: {display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap"}},
       /*#__PURE__*/React.createElement("input", {className: "inp", value: searchFarm, onChange: e => setSearchFarm(e.target.value), placeholder: "\u7267\u5834\u540D\u30FB\u7BA1\u7406\u8005\u30FB\u4F4F\u6240\u3067\u691C\u7D22...", style: {maxWidth: 320}}),
+      React.createElement("button", {className: "btn btn-sm", style: {background: "#0e7490", color: "#fff"}, title: "請求に関係なく、選んだ牧場の封筒を印刷", onClick: () => printEnvelopes(searchFarm ? filteredFarms.filter(f => !f.archived).slice(0, 30) : [], farms)}, "✉ 封筒を印刷"),
       /*#__PURE__*/React.createElement("span", {style: {fontSize: 12, color: "#6b7280"}}, filteredFarms.length, "/", farms.length, "\u4EF6"),
       /*#__PURE__*/React.createElement("button", {onClick: () => setShowArchivedFarms(!showArchivedFarms), className: `tab-btn ${showArchivedFarms ? "active" : ""}`, style: {padding: "3px 10px", fontSize: 11}}, "\u30A2\u30FC\u30AB\u30A4\u30D6", farms.filter(f => f.archived).length > 0 ? `(${farms.filter(f => f.archived).length})` : ""),
       /*#__PURE__*/React.createElement("div", {style: {flex: 1}}),
