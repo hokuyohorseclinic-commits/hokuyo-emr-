@@ -1797,6 +1797,104 @@ var INIT_CASES=[];
 // 薬品の請求額: 治療使用＝pricePerUnit(円/unit)×数量、単品販売(useRx)＝packPrice(円/packUnit)×数量
 function drugUnitPrice(drug,useRx){ if(!drug) return 0; if(useRx && drug.packPrice) return Number(drug.packPrice)||0; return Number(drug.pricePerUnit)||0; }
 function calcDrugLine(drug,dose,useRx){return drug?Math.round(drugUnitPrice(drug,useRx)*(Number(dose)||0)):0;}
+const HK_ZIP_DATA = "虻田郡豊浦町|豊泉:495331,大岸:495332,礼文華:495333,:495400,山梨:495401,大和:495402,美和:495403,桜:495404,高岡:495405,新山梨:495406,上泉:495407,新富:495408,東雲町:495411,旭町:495412,海岸町:495413,幸町:495414,浜町:495415,船見町:495416;苫小牧市|:530000,一本松町:530001,晴海町:530002,入船町:530003,港町:530004,元中野町:530005,新中野町:530006,船見町:530007,末広町:530011,汐見町:530012,高砂町:530013,浜町:530014,本幸町:530015,寿町:530016,栄町:530017,旭町:530018,若草町:530021,表町:530022,錦町:530023,大町:530024,本町:530025,幸町:530026,王子町:530027,春日町:530031,緑町:530032,木場町:530033,清水町:530034,高丘:530035,美園町:530041,三光町:530042,日の出町:530043,音羽町:530044,双葉町:530045,住吉町:530046,泉町:530047,明野元町:530051,新開町:530052,柳町:530053,明野新町:530054,新明町:530055,あけぼの町:530056,白金町:530801,弥生町:530802,矢代町:530803,元町:530804,新富町:530805,大成町:530806,青葉町:530807,光洋町:530811,有明町:530812,小糸井町:530813,糸井:530814,永福町:530815,日吉町:530816,しらかば町:530821,川沿町:530822,柏木町:530823,豊川町:530831,桜木町:530832,日新町:530833,松風町:530841,有珠の沢町:530842,桜坂町:530843,宮の森町:530844,はまなす町:530845,山手町:530851,北光町:530852,花園町:530853,啓北町:530854,見山町:530855,ときわ町:591261,美原町:591262,青雲町:591263,宮前町:591264,樽前:591265,錦西町:591266,澄川町:591271,のぞみ町:591272,明徳町:591273,もえぎ町:591274,錦岡:591275,北星町:591277,東開町:591301,拓勇西町:591302,拓勇東町:591303,北栄町:591304,沼ノ端中央:591305,ウトナイ北:591306,ウトナイ南:591307,美沢:591361,柏原:591362,静川:591363,沼ノ端:591364,植苗:591365,弁天:591371,勇払:591372,真砂町:591373,丸山:660271;勇払郡むかわ町|:540000,旭岡:540001,春日:540002,豊城:540003,田浦:540004,二宮:540005,有明:540011,生田:540012,花岡:540013,米原:540014,汐見:540015,宮戸:540016,大原:540021,花園:540022,末広:540023,青葉:540031,福住:540032,松風:540041,美幸:540042,文京:540051,大成:540052,洋光:540061,若草:540062,駒場:540063,晴海:540064,穂別栄:540141,穂別仁和:540142,穂別和泉:540143,穂別豊田:540144,穂別稲里:540201,穂別長和:540202,穂別平丘:540204,穂別:540211,穂別福山:540361,穂別安住:540362,穂別富内:540364;沙流郡日高町|:550000,富川北:550001,平賀:550002,福満:550003,富川東:550004,富浜:550005,富川南:550006,富川西:550007,富川駒丘:550008,本町東:552301,本町西:552302,栄町東:552303,栄町西:552304,新町:552305,宮下町:552306,松風町:552307,山手町:552308,若葉町:552309,日高:552311,千栄:552314,富岡:552315,三岩:552316,門別本町:592121,緑町:592122,幾千世:592123,庫富:592124,広富:592125,豊郷:592126,旭町:592127,豊田:592241,美原:592242,厚賀町:592243,賀張:592244,清畠:592245,正和:592331,三和:592332;沙流郡平取町|:550100,二風谷:550101,小平:550102,川向:550103,紫雲古津:550104,去場:550105,荷菜:550106,本町:550107,貫気別:550321,旭:550322,芽生:550323,荷負:550324,長知内:550325,振内町:550411,幌毛志:550412,仁世宇:550413,岩知志:550414,豊糠:550415;日高郡新ひだか町|:560000,静内目名:560001,静内神森:560002,静内旭町:560003,静内緑町:560004,静内こうせい町:560005,静内中野町:560006,静内清水丘:560007,静内真歌:560011,静内入船町:560013,静内古川町:560014,静内海岸町:560015,静内本町:560016,静内御幸町:560017,静内吉野町:560018,静内青柳町:560019,静内花園:560021,静内高砂町:560022,静内ときわ町:560023,静内山手町:560024,静内木場町:560025,静内末広町:560026,静内駒場:560027,静内柏台:560028,静内御園:560141,静内農屋:560142,静内豊畑:560143,静内田原:560144,静内高見:560146,東静内:592561,静内浦和:592562,静内川合:592563,静内西川:592564,静内春立:592565,静内東別:592566,三石西端:592571,三石富沢:593101,三石福畑:593102,三石豊岡:593103,三石蓬栄:593104,三石東蓬莱:593105,三石西蓬莱:593106,三石旭町:593107,三石本町:593108,三石越海町:593111,三石港町:593112,三石本桐:593231,三石美野和:593232,三石鳧舞:593233,三石歌笛:593351,三石稲見:593352,三石清瀬:593353,三石川上:593354,三石美河:593355;浦河郡浦河町|:570000,東幌別:570001,西幌別:570002,白泉:570003,月寒:570004,東町うしお:570005,東町かしわ:570006,東町ちのみ:570007,旭町:570011,常盤町:570012,大通:570013,入船町:570014,浜町:570015,潮見町:570021,昌平町:570022,栄丘:570023,築地:570024,緑町:570025,向別:570026,上向別:570027,向が丘東:570031,向が丘西:570032,堺町東:570033,堺町西:570034,井寒台:570035,絵笛:570036,西舎:570171,杵臼:570172,上杵臼:570173,上西舎:570174,荻伏町:593451,瑞穂:593453,野深:593454,東栄:593461,富里:593462,姉茶:593463;様似郡様似町|:580000,旭:580001,幌満:580002,冬島:580003,平宇:580004,田代:580011,朝日丘:580012,緑町:580013,大通:580014,錦町:580015,新富:580021,岡田:580022,栄町:580023,会所町:580024,港町:580025,本町:580026,潮見台:580027,西様似:580031,西町:580032,鵜苫:580033;幌泉郡えりも町|:580200,東洋:580201,歌別:580202,新浜:580203,本町:580204,大和:580205,笛舞:580206,近浦:580207,苫別:580341,えりも岬:580342,庶野:580421,目黒:580422;勇払郡安平町|早来新栄:591431,早来源武:591432,遠浅:591433,早来富岡:591434,:591500,早来大町:591501,早来北進:591502,東早来:591503,早来守田:591504,早来栄町:591505,早来北町:591506,安平:591511,早来瑞穂:591512,早来緑丘:591513,追分本町:591911,追分柏が丘:591921,追分中央:591931,追分青葉:591941,追分白樺:591942,追分若草:591951,追分花園:591961,追分緑が丘:591971,追分美園:591982,追分旭:591983,追分向陽:591984,追分春日:591985,追分弥生:591986,追分豊栄:591987;勇払郡厚真町|:591600,京町:591601,表町:591602,本町:591603,錦町:591604,本郷:591605,朝日:591606,幌里:591611,桜丘:591612,吉野:591613,富里:591614,高丘:591615,幌内:591616,東和:591621,宇隆:591622,新町:591623,豊沢:591624,美里:591625,上厚真:591741,浜厚真:591742,共和:591743,共栄:591744,豊川:591745,上野:591746,富野:591747,厚和:591748,清住:591749,鯉沼:591751,軽舞:591752,豊丘:591753,鹿沼:591754;新冠郡新冠町|共栄:592251,東川:592252,大狩部:592253,新和:592341,里平:592342,太陽:592343,美宇:592344,:592400,本町:592401,中央町:592402,北星町:592403,東町:592404,節婦町:592412,高江:592413,朝日:592414,緑丘:592415,古岸:592416,東泊津:592417,西泊津:592418,若園:592421,岩清水:592422,泉:592423,新栄:592424,明和:592425,万世:592426,大富:592427;北広島市|:611100,中の沢:611101,西の里:611102,虹ケ丘:611103,西の里北:611104,西の里東:611105,西の里南:611106,北の里:611111,共栄:611112,共栄町:611113,東共栄:611114,美咲き野:611115,Ｆビレッジ:611116,中央:611121,広島:611122,朝日町:611123,稲穂町西:611124,稲穂町東:611125,新富町東:611126,新富町西:611127,美沢:611131,北進町:611132,栄町:611133,広葉町:611134,輝美町:611135,松葉町:611136,緑陽町:611137,青葉町:611141,若葉町:611142,南町:611143,白樺町:611144,泉町:611145,高台町:611146,里見町:611147,山手町:611148,東の里:611151,富ケ岡:611153,南の里:611154,希望ケ丘:611261,輪厚:611264,島松:611265,三島:611266,仁別:611267,輪厚中央:611268,輪厚元町:611269,大曲:611270,大曲中央:611271,大曲末広:611272,大曲柏葉:611273,大曲工業団地:611274,大曲南ケ丘:611275,大曲緑ケ丘:611276,大曲光:611277,大曲幸町:611278,大曲並木:611279,輪厚工業団地:611281;千歳市|:660000,長都:660001,釜加:660002,都:660003,泉郷:660004,協和:660005,祝梅:660006,中央:660007,根志越:660008,柏台南:660009,駒里:660011,美々:660012,柏台:660013,青葉丘:660014,青葉:660015,日の出丘:660016,日の出:660017,旭ケ丘:660018,流通:660019,東郊:660021,豊里:660022,寿:660023,弥生:660024,梅ケ丘:660025,住吉:660026,末広:660027,花園:660028,稲穂:660029,長都駅前:660031,北陽:660032,北光:660033,富丘:660034,高台:660035,北栄:660036,新富:660037,信濃:660038,富士:660039,清水町:660041,東雲町:660042,朝日町:660043,平和:660044,真々地:660045,真町:660046,本町:660047,泉沢:660051,文京:660052,福住:660053,柏陽:660054,里美:660055,白樺:660056,若草:660057,栄町:660061,千代田町:660062,幸町:660063,錦町:660064,春日町:660065,大和:660066,桂木:660067,蘭越:660068,新星:660069,桜木:660071,自由ケ丘:660072,北斗:660073,緑町:660074,北信濃:660075,あずさ:660076,上長都:660077,勇舞:660078,清流:660081,幸福:660082,みどり台北:660083,みどり台南:660084,支笏湖温泉:660281,水明郷:660282,モラップ:660283,支寒内:660284,美笛:660285,奥潭:660286,幌美内:660287,東丘:691181,幌加:691183,新川:691184";
+// 2026-11-26 院長指示: 長3封筒（裏に差出人印刷済み）の表に宛名を印刷する。郵便番号は牧場マスターの〒、なければ住所から自動で割り出す（日高・胆振周辺の郵便番号表を内蔵）
+let __HK_ZIP = null;
+function hkZipTable() {
+  if (__HK_ZIP) return __HK_ZIP;
+  __HK_ZIP = HK_ZIP_DATA.split(";").map(x => {
+    const p = x.split("|"), t = {};
+    (p[1] || "").split(",").forEach(q => { const i = q.lastIndexOf(":"); t[q.slice(0, i)] = q.slice(i + 1); });
+    return { c: p[0], short: p[0].replace(/^.+?郡/, ""), t, names: Object.keys(t).filter(Boolean).sort((a, b) => b.length - a.length) };
+  });
+  return __HK_ZIP;
+}
+function normAddr(addr) {
+  return String(addr || "").replace(/[０-９]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0)).replace(/[－‐―−]/g, "-").replace(/[\s　]+/g, "");
+}
+function zipFromAddress(addr) {
+  let a = normAddr(addr);
+  const m = a.match(/^〒?(\d{3})-?(\d{4})/);
+  if (m) return m[1] + "-" + m[2];
+  a = a.replace(/^北海道/, "").replace(/^(日高郡)?三石町/, "日高郡新ひだか町三石").replace(/^(日高郡)?静内町/, "日高郡新ひだか町静内");
+  let best = null, len = 0;
+  hkZipTable().forEach(e => [e.c, e.short].forEach(k => { if (k.length > len && a.startsWith(k)) { best = e; len = k.length; } }));
+  if (!best) return "";
+  const rest = a.slice(len).replace(/^字/, "");
+  const fmt = z => "0" + z.slice(0, 2) + "-" + z.slice(2);
+  for (const n of best.names) { if (rest.startsWith(n) || rest.startsWith(n.replace(/^字/, ""))) return fmt(best.t[n]); }
+  return best.t[""] ? fmt(best.t[""]) : "";
+}
+function envAddressText(addr) {
+  let a = String(addr || "").replace(/[０-９]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0)).replace(/[－‐―−]/g, "-").replace(/^[\s　]*〒?\s*\d{3}-?\d{4}/, "").trim().replace(/\s+/g, "　");
+  if (zipFromAddress(a) && !/^(北海道|東京都|京都府|大阪府|.{2,3}県)/.test(a)) a = "北海道" + a;
+  return a;
+}
+function envTate(s) {
+  const k = "〇一二三四五六七八九";
+  return String(s || "").replace(/\d/g, d => k[+d]).replace(/-/g, "ー");
+}
+function envEsc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function printEnvelopes(list) {
+  list = (list || []).filter(f => f && f.name);
+  if (!list.length) return alert("封筒を印刷する牧場がありません");
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) return alert("ポップアップがブロックされました。許可してからもう一度押してください");
+  const pages = list.map((f, i) => {
+    const zip = (f.zip || zipFromAddress(f.address)).replace(/\D/g, "");
+    const digits = zip.split("").map((d, j) => '<span class="zd zd' + j + '">' + d + "</span>").join("");
+    return '<div class="env" data-i="' + i + '"><div class="inner">' +
+      '<div class="zipbox" contenteditable="true" data-zip="' + zip + '">' + digits + "</div>" +
+      '<div class="ziptxt" contenteditable="true">' + (zip ? "〒" + zip.slice(0, 3) + "-" + zip.slice(3) : "〒") + "</div>" +
+      '<div class="addr" contenteditable="true">' + envEsc(envTate(envAddressText(f.address))) + "</div>" +
+      '<div class="name" contenteditable="true">' + envEsc(f.name) + '<span class="sama">様</span></div>' +
+      '<div class="zaichu">請求書在中</div>' +
+      "</div></div>";
+  }).join("");
+  const rows = list.map((f, i) => {
+    const zip = f.zip || zipFromAddress(f.address);
+    const warn = !f.address ? '<b style="color:#dc2626">住所なし</b>' : !zip ? '<b style="color:#d97706">〒不明</b>' : zip;
+    return '<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;font-size:12px;white-space:nowrap"><input type="checkbox" checked data-pick="' + i + '">' + envEsc(f.name) + '<span style="color:#6b7280">（' + warn + "）</span></label>";
+  }).join("");
+  const css = '@page{size:120mm 235mm;margin:0}*{box-sizing:border-box}body{margin:0;font-family:"Hiragino Mincho ProN","Yu Mincho","MS Mincho",serif;background:#e5e7eb}' +
+    ".bar{position:sticky;top:0;z-index:9;background:#fff;border-bottom:1px solid #d1d5db;padding:10px 14px;font-family:sans-serif;font-size:13px}" +
+    ".bar button{padding:8px 22px;font-size:14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700}" +
+    ".bar input[type=number]{width:52px}" +
+    ".env{width:120mm;height:235mm;background:#fff;margin:12px auto;position:relative;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.25)}" +
+    ".inner{position:absolute;inset:0}" +
+    ".zipbox{position:absolute;top:12mm;left:64.3mm;width:48mm;height:8mm;outline:none}" +
+    ".zd{position:absolute;top:0;width:5.7mm;height:8mm;line-height:8mm;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:15pt}" +
+    ".zd0{left:0}.zd1{left:7mm}.zd2{left:14mm}.zd3{left:21.9mm;width:5.4mm}.zd4{left:28.7mm;width:5.4mm}.zd5{left:35.5mm;width:5.4mm}.zd6{left:42.3mm;width:5.4mm}" +
+    ".ziptxt{position:absolute;top:11mm;right:10mm;font-family:Arial,Helvetica,sans-serif;font-size:15pt;letter-spacing:1px;outline:none}" +
+    "body.boxmode .ziptxt{display:none}body:not(.boxmode) .zipbox{display:none}" +
+    ".addr{position:absolute;top:30mm;right:13mm;height:180mm;writing-mode:vertical-rl;font-size:14pt;line-height:1.7;letter-spacing:1px;outline:none}" +
+    ".name{position:absolute;top:42mm;left:50%;transform:translateX(-50%);height:175mm;writing-mode:vertical-rl;font-size:26pt;font-weight:700;letter-spacing:4px;line-height:1.3;outline:none}" +
+    ".sama{margin-top:10mm;display:inline-block}" +
+    ".zaichu{position:absolute;left:13mm;bottom:22mm;writing-mode:vertical-rl;color:#dc2626;border:1.5px solid #dc2626;padding:3mm 1.5mm;font-size:12pt;letter-spacing:3px;font-weight:700}" +
+    "body.nozai .zaichu{display:none}.env.off{display:none}" +
+    "@media print{body{background:#fff}.bar{display:none}.env{margin:0;box-shadow:none;page-break-after:always}}";
+  const script = "(function(){var K='hokuyo_env_cfg';var c={};try{c=JSON.parse(localStorage.getItem(K)||'{}')}catch(e){}" +
+    "var $=function(id){return document.getElementById(id)};" +
+    "function ap(){document.body.classList.toggle('boxmode',!!c.box);document.body.classList.toggle('nozai',!!c.nozai);" +
+    "document.querySelectorAll('.inner').forEach(function(el){el.style.transform='translate('+(+c.dx||0)+'mm,'+(+c.dy||0)+'mm)'});" +
+    "$('box').checked=!!c.box;$('zai').checked=!c.nozai;$('dx').value=c.dx||0;$('dy').value=c.dy||0;" +
+    "try{localStorage.setItem(K,JSON.stringify(c))}catch(e){}}" +
+    "$('box').onchange=function(){c.box=this.checked;ap()};$('zai').onchange=function(){c.nozai=!this.checked;ap()};" +
+    "$('dx').oninput=function(){c.dx=this.value;ap()};$('dy').oninput=function(){c.dy=this.value;ap()};" +
+    "function cnt(){var n=document.querySelectorAll('.env:not(.off)').length;$('cnt').textContent=n+'枚'}" +
+    "document.querySelectorAll('[data-pick]').forEach(function(cb){cb.onchange=function(){document.querySelector('.env[data-i=\"'+cb.dataset.pick+'\"]').classList.toggle('off',!cb.checked);cnt()}});" +
+    "ap();cnt()})();";
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>封筒印刷（長3）</title><style>' + css + "</style></head><body>" +
+    '<div class="bar"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><button onclick="window.print()">🖨 封筒を印刷</button><b id="cnt"></b>' +
+    '<label><input type="checkbox" id="zai"> 請求書在中</label>' +
+    '<label title="封筒の表に赤い郵便番号の枠がある場合はチェック"><input type="checkbox" id="box"> 郵便番号の枠に合わせる</label>' +
+    '<span>位置の調整 横 <input type="number" id="dx" step="0.5"> mm　縦 <input type="number" id="dy" step="0.5"> mm</span></div>' +
+    '<div style="margin-top:6px;color:#374151">印刷の設定で用紙サイズを「長形3号（120×235mm）」、余白を「なし」にしてください。文字は印刷前にクリックして直せます。チェックを外した牧場は印刷されません。</div>' +
+    '<div style="margin-top:6px;max-height:90px;overflow:auto">' + rows + "</div></div>" +
+    pages + "<script>" + script + "<\/script></body></html>");
+  w.document.close();
+}
+
 // 2026-11-14 院長指示: 馬別請求書に「明細も付ける」（カルテの処置・薬品から内訳行を作る。金額は税抜）
 function invDetailRows(it, dm) {
   if (!window.__invDetail || !it || !it.v) return "";
@@ -8445,6 +8543,10 @@ function BillingPage({
       },
       onClick: () => printReceipt(fb)
     }, "\uD83E\uDDFE \u9818\u53CE\u66F8"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-sm",
+      style: { background: "#0e7490", color: "#fff" },
+      onClick: () => printEnvelopes([fb.farm])
+    }, "\u2709 \u5c01\u7b52"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-secondary btn-sm",
       onClick: () => setShowPayForm(fb.farm.id)
     }, "\uFF0B \u5165\u91D1\u767B\u9332"))), /*#__PURE__*/React.createElement("div", {
@@ -8798,6 +8900,12 @@ function BillingPage({
     const unclosedCount = filteredBilling.length - closedCount;
     const label = billingYear + "\u5E74" + billingMonth + "\u6708";
     return React.createElement(React.Fragment, null,
+      React.createElement("button", {
+        className: "btn btn-sm",
+        style: { background: "#0e7490", color: "#fff", fontWeight: 700, padding: "6px 16px" },
+        title: "請求がある牧場の宛名を長3封筒に印刷",
+        onClick: () => printEnvelopes(filteredBilling.filter(fb => (fb.total || 0) > 0 || (fb.nextCarryover || 0) > 0).map(fb => fb.farm))
+      }, "✉ 封筒（長3）"),
       React.createElement("button", {
         className: "btn btn-sm",
         style: {
@@ -9508,7 +9616,7 @@ function MastersPage({farms, horses, drugsMaster, treatmentsMaster, cases, onAdd
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.name || "", onChange: e => setEditFarmData({...editFarmData, name: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {fontWeight: 600, cursor: "pointer", opacity: f.archived ? 0.6 : 1}}, f.archived && /*#__PURE__*/React.createElement("span", {className: "badge badge-gray", style: {marginRight: 6, fontSize: 9}}, "\u30A2\u30FC\u30AB\u30A4\u30D6\u6E08"), f.name),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.owner || "", onChange: e => setEditFarmData({...editFarmData, owner: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}})) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.owner),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.phone || "", onChange: e => setEditFarmData({...editFarmData, phone: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.phone),
-              isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.address || "", onChange: e => setEditFarmData({...editFarmData, address: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.address),
+              isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {value: editFarmData.zip || "", placeholder: "〒郵便番号", title: "空欄なら住所から自動で封筒に入ります", onChange: e => setEditFarmData({...editFarmData, zip: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11, marginBottom: 3}}), /*#__PURE__*/React.createElement("input", {value: editFarmData.address || "", onChange: e => setEditFarmData({...editFarmData, address: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px", fontSize: 11}})) : /*#__PURE__*/React.createElement("td", {style: {fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, f.zip ? "〒" + f.zip + " " : "", f.address),
               isEditing ? /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {value: editFarmData.billingCycle || "", onChange: e => setEditFarmData({...editFarmData, billingCycle: e.target.value}), style: {width: "100%", padding: "4px 8px", border: "1px solid #d1d5db", borderRadius: "4px"}}, /*#__PURE__*/React.createElement("option", null, ""), /*#__PURE__*/React.createElement("option", null, "\u672B\u3006"), /*#__PURE__*/React.createElement("option", null, "20\u65E5\u3006"), /*#__PURE__*/React.createElement("option", null, "\u7267\u5834\u3006"), /*#__PURE__*/React.createElement("option", null, "\u8ACB\u6C42\u306A\u3057"))) : /*#__PURE__*/React.createElement("td", {style: {cursor: "pointer"}, onDoubleClick: () => startEditFarm(f)}, /*#__PURE__*/React.createElement("span", {className: `badge badge-${f.billingCycle === "20\u65E5\u3006" ? "orange" : f.billingCycle === "\u7267\u5834\u3006" ? "purple" : f.billingCycle === "\u8ACB\u6C42\u306A\u3057" ? "gray" : "blue"}`}, f.billingCycle)),
               /*#__PURE__*/React.createElement("td", {style: {whiteSpace: "nowrap"}},
                 isEditing ? [
